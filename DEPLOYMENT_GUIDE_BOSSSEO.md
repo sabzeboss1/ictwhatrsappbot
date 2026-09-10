@@ -129,22 +129,74 @@ docker compose exec backend npm run prisma:seed
 
 ---
 
-## Étape 5 : Configurer Nginx pour le sous-domaine `bot.bossseo.net`
+## Étape 5 : Configurer le Serveur Web (Apache ou Nginx) pour `bot.bossseo.net`
 
-Créez le fichier de configuration Nginx pour `bot.bossseo.net` :
+### Option A : Serveur VPS sous Apache (Recommandé pour votre VPS WordPress)
 
+1. Activez les modules Apache nécessaires pour le reverse-proxy, WebSockets et SSL :
 ```bash
-sudo nano /etc/nginx/sites-available/bot.bossseo.net.conf
+sudo a2enmod proxy proxy_http proxy_wstunnel rewrite ssl headers
 ```
 
-Collez la configuration suivante :
+2. Créez la configuration du VirtualHost :
+```bash
+sudo nano /etc/apache2/sites-available/bot.bossseo.net.conf
+```
+
+Collez la configuration suivante (ou copiez celle fournie dans le fichier `apache-vps-wordpress.conf.example`) :
+
+```apache
+<VirtualHost *:80>
+    ServerName bot.bossseo.net
+    ServerAdmin admin@insidecameroontourism.com
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+
+    # 1. Gestion des WebSockets temps réel (Socket.IO)
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/socket.io/(.*) ws://127.0.0.1:3001/socket.io/$1 [P,L]
+
+    # 2. Redirection des routes API Backend
+    ProxyPass /api/ http://127.0.0.1:3001/api/
+    ProxyPassReverse /api/ http://127.0.0.1:3001/api/
+
+    # 3. Redirection des Webhooks WhatsApp Evolution API
+    ProxyPass /webhooks/ http://127.0.0.1:3001/webhooks/
+    ProxyPassReverse /webhooks/ http://127.0.0.1:3001/webhooks/
+
+    # 4. Redirection Socket.IO polling
+    ProxyPass /socket.io/ http://127.0.0.1:3001/socket.io/
+    ProxyPassReverse /socket.io/ http://127.0.0.1:3001/socket.io/
+
+    # 5. Redirection de l'interface Frontend (Dashboard React)
+    ProxyPass / http://127.0.0.1:3000/
+    ProxyPassReverse / http://127.0.0.1:3000/
+
+    ErrorLog ${APACHE_LOG_DIR}/bot.bossseo.net_error.log
+    CustomLog ${APACHE_LOG_DIR}/bot.bossseo.net_access.log combined
+</VirtualHost>
+```
+
+3. Activez le site et rechargez Apache :
+```bash
+sudo a2ensite bot.bossseo.net.conf
+sudo apache2ctl configtest
+sudo systemctl reload apache2
+```
+
+---
+
+### Option B : Serveur VPS sous Nginx (Alternative)
+<details>
+<summary>Cliquez pour voir la configuration Nginx si vous préférez Nginx</summary>
 
 ```nginx
 server {
     listen 80;
     server_name bot.bossseo.net;
 
-    # 1. Interface Web (Frontend Dashboard React)
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -156,7 +208,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
-    # 2. API Backend
     location /api/ {
         proxy_pass http://127.0.0.1:3001/api/;
         proxy_http_version 1.1;
@@ -166,7 +217,6 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # 3. Webhook entrant Evolution API -> Backend
     location /webhooks/ {
         proxy_pass http://127.0.0.1:3001/webhooks/;
         proxy_http_version 1.1;
@@ -176,7 +226,6 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    # 4. WebSockets temps réel (Socket.IO)
     location /socket.io/ {
         proxy_pass http://127.0.0.1:3001/socket.io/;
         proxy_http_version 1.1;
@@ -188,87 +237,57 @@ server {
     }
 }
 ```
-
-### Activer le site dans Nginx :
-```bash
-sudo ln -s /etc/nginx/sites-available/bot.bossseo.net.conf /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
+</details>
 
 ---
 
 ## Étape 6 : Générer le Certificat SSL HTTPS Gratuit (Certbot)
 
-Exécutez Certbot pour installer le certificat SSL Let's Encrypt :
-
+Pour **Apache** :
 ```bash
-sudo certbot --nginx -d bot.bossseo.net
+sudo certbot --apache -d bot.bossseo.net
 ```
-*Répondez aux questions et choisissez la redirection automatique en HTTPS (option 2).*
+*(Pour Nginx, utilisez `sudo certbot --nginx -d bot.bossseo.net`)*.  
+Certbot va configurer automatiquement la redirection HTTPS et le renouvellement automatique.
 
 ---
 
-## Étape 7 : Connecter votre Numéro WhatsApp (QR Code)
+## Étape 7 : Connecter WhatsApp directement depuis le Dashboard (1 Clic)
 
-### 1. Créer l'instance WhatsApp `ict-main`
-Depuis votre serveur VPS, exécutez la commande suivante :
+Plus besoin de lancer de commandes curl complexes dans le terminal !
 
-```bash
-curl -X POST "http://localhost:8080/instance/create" \
-  -H "apikey: B6D711FCDE4D4FD5936544120E713976" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "instanceName": "ict-main",
-    "token": "ict_instance_token_2026",
-    "qrcode": true,
-    "integration": "WHATSAPP-BAILEYS"
-  }'
-```
-
-### 2. Scanner le QR Code
-Ouvrez votre navigateur sur :
-```
-http://IP_DE_VOTRE_VPS:8080/instance/connect/ict-main
-```
-1. Ouvrez WhatsApp sur votre smartphone.
-2. Allez dans **Paramètres** ➔ **Appareils connectés** ➔ **Connecter un appareil**.
-3. Scannez le QR Code affiché à l'écran.
-4. Le statut passe à `CONNECTED`.
-
-### 3. Configurer le Webhook vers votre domaine
-Exécutez cette commande pour relier Evolution API à notre backend en production :
-
-```bash
-curl -X POST "http://localhost:8080/webhook/set/ict-main" \
-  -H "apikey: B6D711FCDE4D4FD5936544120E713976" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "webhook": {
-      "enabled": true,
-      "url": "https://bot.bossseo.net/webhooks/whatsapp",
-      "headers": {
-        "X-Webhook-Secret": "ict_evolution_secret_token_2026"
-      },
-      "byEvents": false,
-      "base64": false,
-      "events": [
-        "MESSAGES_UPSERT"
-      ]
-    }
-  }'
-```
-
----
-
-## Étape 8 : Vérification et Accès
-
-1. Accédez à votre tableau de bord commercial :
-   👉 **`https://bot.bossseo.net`**
-2. Connectez-vous avec :
+1. Connectez-vous à votre tableau de bord sur **`https://bot.bossseo.net/login`** avec :
    * **Email :** `admin@ict.cm`
    * **Mot de passe :** `Admin123!`
-3. Envoyez un message depuis n'importe quel compte WhatsApp au numéro connecté :
-   * L'IA répond en quelques secondes.
-   * La conversation apparaît en temps réel dans l'onglet **Conversations**.
-   * Le prospect est automatiquement créé et noté dans votre compte **HubSpot CRM**.
+2. En haut à droite ou dans l'onglet **Paramètres**, cliquez sur le bouton **« Lier WhatsApp (QR) »**.
+3. Cliquez sur **« Générer le QR Code »** :
+   * Le système configure automatiquement l'instance et le Webhook entrant vers `https://bot.bossseo.net/webhooks/whatsapp`.
+   * Le QR Code s'affiche directement sur votre écran.
+4. Ouvrez WhatsApp sur votre smartphone :
+   * **Paramètres** ➔ **Appareils connectés** ➔ **Connecter un appareil**.
+   * Scannez le QR Code affiché.
+5. Le badge passe immédiatement à **🟢 WhatsApp Connecté** !
+
+---
+
+## ⚡ Comment mettre à jour en production sans recommencer le déploiement ?
+
+Lorsque vous modifiez du code (frontend, backend, design, etc.), **vous ne devez PAS recommencer le déploiement à zéro**. La base de données PostgreSQL, vos prospects et votre session WhatsApp restent intacts !
+
+Il vous suffit de faire :
+
+### 1. Sur votre machine locale :
+```bash
+git add .
+git commit -m "Mise à jour de l'application"
+git push origin main
+```
+
+### 2. Sur votre VPS (dans le dossier de l'application) :
+```bash
+cd /var/www/ict-bot
+git pull origin main
+docker compose up -d --build frontend backend
+```
+
+En moins de 60 secondes, Docker recompile uniquement les conteneurs modifiés et redémarre l'application à chaud sans coupure de base de données.

@@ -23,36 +23,36 @@ let messageQueue: Queue | null = null;
 let hubspotQueue: Queue | null = null;
 let redisAvailable = false;
 
-// Tentative d'initialisation Redis / BullMQ
+// Tentative d'initialisation Redis / BullMQ de manière non bloquante
 try {
   const redisConnection = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    connectTimeout: 1000,
     retryStrategy: (times: number) => {
-      if (times > 3) {
-        return null; // Arrêt des tentatives si Redis non présent
+      if (times > 1) {
+        return null; // Pas de retry infini si Redis n'est pas lancé
       }
-      return Math.min(times * 100, 1000);
+      return 500;
     },
   });
 
   redisConnection.on('connect', () => {
     redisAvailable = true;
     console.log('✓ Connecté à Redis pour BullMQ');
+    try {
+      messageQueue = new Queue('whatsapp-messages', { connection: redisConnection as any });
+      hubspotQueue = new Queue('hubspot-sync', { connection: redisConnection as any });
+    } catch (err) {
+      console.log('ℹ Erreur init BullMQ Queue, utilisation mode asynchrone mémoire');
+    }
   });
 
-  redisConnection.on('error', (err: any) => {
-    if (!redisAvailable) {
-      // Éviter le spam de logs si Redis est absent en dev
-      console.log('ℹ Redis non disponible en local, bascule en mode file asynchrone mémoire');
-    }
+  redisConnection.on('error', () => {
     redisAvailable = false;
   });
-
-  messageQueue = new Queue('whatsapp-messages', { connection: redisConnection as any });
-  hubspotQueue = new Queue('hubspot-sync', { connection: redisConnection as any });
 } catch (e) {
-  console.log('ℹ BullMQ en attente: mode mémoire actif');
+  console.log('ℹ Mode mémoire asynchrone actif pour les messages');
 }
 
 export function registerProcessors(

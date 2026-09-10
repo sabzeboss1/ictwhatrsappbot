@@ -1,0 +1,49 @@
+# ==============================================================================
+# Configuration Apache VirtualHost pour bot.bossseo.net sur VPS avec WordPress
+# ==============================================================================
+# Emplacement habituel sur Ubuntu / Debian :
+# /etc/apache2/sites-available/bot.bossseo.net.conf
+#
+# Modules Apache requis :
+# sudo a2enmod proxy proxy_http proxy_wstunnel rewrite ssl headers
+#
+# Activation :
+# sudo a2ensite bot.bossseo.net.conf
+# sudo apache2ctl configtest
+# sudo systemctl reload apache2
+#
+# Activation SSL Let's Encrypt :
+# sudo certbot --apache -d bot.bossseo.net
+# ==============================================================================
+
+<VirtualHost *:80>
+    ServerName bot.bossseo.net
+    ServerAdmin admin@insidecameroontourism.com
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+
+    # 1. Gestion des WebSockets temps réel (Socket.IO)
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule ^/socket.io/(.*) ws://127.0.0.1:3001/socket.io/$1 [P,L]
+
+    # 2. Redirection des routes API Backend
+    ProxyPass /api/ http://127.0.0.1:3001/api/
+    ProxyPassReverse /api/ http://127.0.0.1:3001/api/
+
+    # 3. Redirection des Webhooks WhatsApp Evolution API
+    ProxyPass /webhooks/ http://127.0.0.1:3001/webhooks/
+    ProxyPassReverse /webhooks/ http://127.0.0.1:3001/webhooks/
+
+    # 4. Redirection Socket.IO polling
+    ProxyPass /socket.io/ http://127.0.0.1:3001/socket.io/
+    ProxyPassReverse /socket.io/ http://127.0.0.1:3001/socket.io/
+
+    # 5. Redirection de l'interface Frontend (Dashboard React)
+    ProxyPass / http://127.0.0.1:3000/
+    ProxyPassReverse / http://127.0.0.1:3000/
+
+    ErrorLog ${APACHE_LOG_DIR}/bot.bossseo.net_error.log
+    CustomLog ${APACHE_LOG_DIR}/bot.bossseo.net_access.log combined
+</VirtualHost>

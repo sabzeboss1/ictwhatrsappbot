@@ -15,6 +15,9 @@ import {
   Clock,
   Sparkles,
   ChevronRight,
+  ArrowLeft,
+  Info,
+  X,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
@@ -23,11 +26,14 @@ import { useAuth } from '../lib/auth-context';
 export const Conversations: React.FC = () => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [manualText, setManualText] = useState('');
   const [sending, setSending] = useState(false);
-  const [showDetailPanel, setShowDetailPanel] = useState(true);
+  const [showDetailPanel, setShowDetailPanel] = useState(false);
+  const [mobileShowChat, setMobileShowChat] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // 1. Liste des conversations
@@ -40,9 +46,9 @@ export const Conversations: React.FC = () => {
     refetchInterval: 10000,
   });
 
-  // Sélectionner la première conversation par défaut
+  // Sélectionner la première conversation par défaut sur desktop
   useEffect(() => {
-    if (conversations && conversations.length > 0 && !selectedLeadId) {
+    if (conversations && conversations.length > 0 && !selectedLeadId && window.innerWidth >= 768) {
       setSelectedLeadId(conversations[0].id);
     }
   }, [conversations, selectedLeadId]);
@@ -157,24 +163,28 @@ export const Conversations: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full overflow-hidden bg-[#0b141a]">
-      {/* Colonne gauche : Liste des conversations */}
-      <div className="w-80 md:w-96 border-r border-slate-800 bg-[#111b21] flex flex-col">
+    <div className="flex h-full overflow-hidden bg-[#0b141a] relative">
+      {/* 1. Colonne Liste des Conversations */}
+      <div
+        className={`${
+          mobileShowChat ? 'hidden md:flex' : 'flex'
+        } w-full md:w-80 lg:w-96 border-r border-slate-800 bg-[#111b21] flex-col shrink-0`}
+      >
         {/* Barre de recherche */}
         <div className="p-3.5 border-b border-slate-800">
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Rechercher nom, téléphone..."
+              placeholder="Rechercher nom, numéro, offre..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full bg-slate-900/80 border border-slate-700/60 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+              className="w-full bg-slate-900 border border-slate-700/60 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-400 focus:outline-none focus:border-emerald-500"
             />
           </div>
         </div>
 
-        {/* Liste défilante des contacts */}
+        {/* Liste des contacts défilante */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-800/40">
           {loadingConvs ? (
             <div className="p-8 text-center text-xs text-slate-500">Chargement des échanges...</div>
@@ -189,14 +199,17 @@ export const Conversations: React.FC = () => {
               return (
                 <button
                   key={c.id}
-                  onClick={() => setSelectedLeadId(c.id)}
+                  onClick={() => {
+                    setSelectedLeadId(c.id);
+                    setMobileShowChat(true);
+                  }}
                   className={`w-full text-left p-3.5 transition-all flex items-start space-x-3 ${
                     isSelected
                       ? 'bg-slate-800/80 border-l-4 border-emerald-500'
                       : 'hover:bg-slate-800/40'
                   }`}
                 >
-                  <div className="relative">
+                  <div className="relative shrink-0">
                     <div className="w-11 h-11 rounded-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center font-bold text-slate-200 text-sm border border-slate-700">
                       {displayName.substring(0, 2).toUpperCase()}
                     </div>
@@ -210,14 +223,14 @@ export const Conversations: React.FC = () => {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
                       <p className="text-xs font-bold text-white truncate">{displayName}</p>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-slate-500 shrink-0 ml-1">
                         {lastMsg ? new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between mt-1">
-                      <p className="text-[11px] text-slate-400 truncate max-w-[180px]">
-                        {lastMsg ? lastMsg.content : 'Pas encore de message'}
+                      <p className="text-[11px] text-slate-400 truncate max-w-[170px] sm:max-w-[200px]">
+                        {lastMsg ? lastMsg.content : 'Pas de message'}
                       </p>
                       {getStatusBadge(c.leadStatus)}
                     </div>
@@ -244,36 +257,52 @@ export const Conversations: React.FC = () => {
         </div>
       </div>
 
-      {/* Colonne centrale : Fil de discussion */}
-      <div className="flex-1 flex flex-col bg-[#0b141a] chat-pattern relative">
+      {/* 2. Colonne Centrale : Chat Actif */}
+      <div
+        className={`${
+          !mobileShowChat ? 'hidden md:flex' : 'flex'
+        } flex-1 flex flex-col bg-[#0b141a] chat-pattern relative min-w-0 h-full`}
+      >
         {currentLead ? (
           <>
             {/* Header de la conversation */}
-            <div className="h-16 bg-[#111b21] border-b border-slate-800 px-6 flex items-center justify-between z-10">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-emerald-400 text-sm">
+            <div className="h-16 bg-[#111b21] border-b border-slate-800 px-3 sm:px-6 flex items-center justify-between z-10 shrink-0">
+              <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+                {/* Bouton retour sur mobile */}
+                <button
+                  onClick={() => setMobileShowChat(false)}
+                  className="md:hidden p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 shrink-0"
+                  aria-label="Retour"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+
+                <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-emerald-400 text-xs sm:text-sm shrink-0">
                   {(currentLead.firstName || currentLead.phone).substring(0, 2).toUpperCase()}
                 </div>
-                <div>
+
+                <div className="min-w-0 truncate">
                   <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-bold text-white">
+                    <h2 className="text-xs sm:text-sm font-bold text-white truncate">
                       {currentLead.firstName ? `${currentLead.firstName} ${currentLead.lastName || ''}` : currentLead.phone}
                     </h2>
                     {currentLead.company && (
-                      <span className="text-[11px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
+                      <span className="hidden sm:inline text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 truncate">
                         {currentLead.company}
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-400">{currentLead.phone} • {currentLead.source}</p>
+                  <p className="text-[10px] sm:text-[11px] text-slate-400 truncate">
+                    {currentLead.phone} • {currentLead.source}
+                  </p>
                 </div>
               </div>
 
-              {/* Commutateur de prise de contrôle IA / Humain (Section 8.2) */}
-              <div className="flex items-center space-x-3">
+              {/* Actions Header (Bascule IA / Fiche Info) */}
+              <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
                 <button
                   onClick={toggleAiMode}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border ${
+                  className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition-all border ${
                     currentLead.aiDisabled
                       ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
                       : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30'
@@ -283,12 +312,14 @@ export const Conversations: React.FC = () => {
                   {currentLead.aiDisabled ? (
                     <>
                       <UserCheck className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Mode Conseiller Humain (IA en pause)</span>
+                      <span className="hidden sm:inline">Mode Conseiller Humain</span>
+                      <span className="sm:hidden">Humain</span>
                     </>
                   ) : (
                     <>
                       <Bot className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Mode IA Actif (Réponse auto)</span>
+                      <span className="hidden sm:inline">Mode IA Actif</span>
+                      <span className="sm:hidden">IA</span>
                     </>
                   )}
                 </button>
@@ -298,15 +329,15 @@ export const Conversations: React.FC = () => {
                   className={`p-2 rounded-xl text-xs font-semibold border transition-all ${
                     showDetailPanel ? 'bg-slate-800 text-emerald-400 border-slate-700' : 'text-slate-400 border-transparent hover:bg-slate-800'
                   }`}
-                  title="Afficher/Masquer le panneau d'informations lead"
+                  title="Fiche Qualification"
                 >
-                  <ChevronRight className={`w-4 h-4 transition-transform ${showDetailPanel ? 'rotate-180' : ''}`} />
+                  <Info className="w-4 h-4" />
                 </button>
               </div>
             </div>
 
-            {/* Corps des messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {/* Corps des messages avec défilement */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 sm:space-y-4">
               {loadingLead ? (
                 <div className="text-center text-xs text-slate-500 py-12">Chargement de la conversation...</div>
               ) : currentLead.messages?.length === 0 ? (
@@ -320,22 +351,22 @@ export const Conversations: React.FC = () => {
                       className={`flex flex-col ${isInbound ? 'items-start' : 'items-end'}`}
                     >
                       <div
-                        className={`max-w-md md:max-w-lg rounded-2xl px-4 py-3 shadow-md ${
+                        className={`max-w-[85%] sm:max-w-md md:max-w-lg rounded-2xl px-3.5 sm:px-4 py-2.5 sm:py-3 shadow-md ${
                           isInbound
                             ? 'bg-[#202c33] text-slate-100 rounded-tl-none border border-slate-700/50'
                             : 'bg-[#005c4b] text-white rounded-tr-none border border-emerald-600/30'
                         }`}
                       >
                         <p className="text-xs leading-relaxed whitespace-pre-wrap">{m.content}</p>
-                        <div className="flex items-center justify-between gap-3 mt-2 pt-1 border-t border-white/10">
-                          <span className="text-[10px] text-white/60">
+                        <div className="flex items-center justify-between gap-3 mt-1.5 pt-1 border-t border-white/10">
+                          <span className="text-[9px] sm:text-[10px] text-white/60">
                             {isInbound
                               ? 'Prospect'
                               : m.sentByAgentId
                               ? 'Conseiller Humain'
                               : 'Agent IA ICT'}
                           </span>
-                          <span className="text-[10px] text-white/50">
+                          <span className="text-[9px] sm:text-[10px] text-white/50">
                             {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
@@ -347,58 +378,65 @@ export const Conversations: React.FC = () => {
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Champ de réponse manuelle en bas */}
-            <div className="p-4 bg-[#111b21] border-t border-slate-800">
+            {/* Champ de saisie manuelle en bas */}
+            <div className="p-3 sm:p-4 bg-[#111b21] border-t border-slate-800 shrink-0">
               {currentLead.aiDisabled && (
-                <div className="mb-2 text-[11px] text-amber-300/90 flex items-center gap-1.5 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20">
-                  <UserCheck className="w-3.5 h-3.5" />
-                  <span>Vous avez la main sur cette conversation. L'IA ne répondra pas automatiquement.</span>
+                <div className="mb-2 text-[10px] sm:text-[11px] text-amber-300/90 flex items-center gap-1.5 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
+                  <UserCheck className="w-3.5 h-3.5 shrink-0" />
+                  <span>Prise de main active : l'IA ne répondra pas automatiquement.</span>
                 </div>
               )}
-              <form onSubmit={handleSendManual} className="flex items-center space-x-3">
+              <form onSubmit={handleSendManual} className="flex items-center space-x-2 sm:space-x-3">
                 <input
                   type="text"
-                  placeholder="Écrivez votre message WhatsApp (envoi direct au prospect)..."
+                  placeholder="Écrivez votre message WhatsApp direct..."
                   value={manualText}
                   onChange={(e) => setManualText(e.target.value)}
-                  className="flex-1 bg-slate-900 border border-slate-700/80 rounded-xl px-4 py-3 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500"
+                  className="flex-1 bg-slate-900 border border-slate-700/80 rounded-xl px-3 sm:px-4 py-2.5 sm:py-3 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-emerald-500"
                 />
                 <button
                   type="submit"
                   disabled={!manualText.trim() || sending}
-                  className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-5 py-3 rounded-xl flex items-center space-x-2 transition-all shadow-lg shadow-emerald-500/20 text-xs"
+                  className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold px-4 sm:px-5 py-2.5 sm:py-3 rounded-xl flex items-center space-x-1.5 transition-all shadow-lg shadow-emerald-500/20 text-xs shrink-0"
                 >
                   <Send className="w-4 h-4" />
-                  <span>Envoyer</span>
+                  <span className="hidden sm:inline">Envoyer</span>
                 </button>
               </form>
             </div>
           </>
         ) : (
-          <div className="h-full flex items-center justify-center text-slate-500 text-xs">
-            Sélectionnez une conversation pour commencer
+          <div className="h-full flex items-center justify-center text-slate-500 text-xs p-6 text-center">
+            Sélectionnez une conversation dans la liste pour commencer
           </div>
         )}
       </div>
 
-      {/* Volet latéral escamotable : Profil Lead & Scoring */}
+      {/* 3. Volet Latéral / Tiroir Mobile : Fiche Qualification & HubSpot */}
       {showDetailPanel && currentLead && (
-        <div className="w-80 border-l border-slate-800 bg-[#111b21] flex flex-col overflow-y-auto p-5 space-y-6">
-          {/* Header Lead */}
-          <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-              Fiche Qualification IA
-            </span>
-            <h3 className="text-base font-extrabold text-white mt-1">
-              {currentLead.firstName ? `${currentLead.firstName} ${currentLead.lastName || ''}` : currentLead.phone}
-            </h3>
-            <p className="text-xs text-slate-400">{currentLead.customerType || 'Particulier'}</p>
+        <div className="fixed inset-y-0 right-0 w-full sm:w-80 md:relative md:w-80 border-l border-slate-800 bg-[#111b21] flex flex-col z-30 shadow-2xl md:shadow-none overflow-y-auto p-5 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                Fiche Qualification IA
+              </span>
+              <h3 className="text-base font-extrabold text-white mt-0.5">
+                {currentLead.firstName ? `${currentLead.firstName} ${currentLead.lastName || ''}` : currentLead.phone}
+              </h3>
+              <p className="text-xs text-slate-400">{currentLead.customerType || 'Particulier'}</p>
+            </div>
+            <button
+              onClick={() => setShowDetailPanel(false)}
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 md:hidden"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
           {/* Jauge de score */}
           <div className="glass-panel p-4 rounded-2xl border border-slate-800">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-slate-300 font-semibold">Score de qualification</span>
+              <span className="text-xs text-slate-300 font-semibold">Score IA</span>
               <span className="text-sm font-black text-emerald-400">{currentLead.qualificationScore}/100</span>
             </div>
             <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
@@ -417,7 +455,7 @@ export const Conversations: React.FC = () => {
             </div>
           </div>
 
-          {/* Données extraites par l'IA */}
+          {/* Données extraites */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Données extraites</h4>
 
@@ -433,7 +471,7 @@ export const Conversations: React.FC = () => {
               <div className="flex items-start gap-2">
                 <Users className="w-3.5 h-3.5 text-slate-400 mt-0.5" />
                 <div>
-                  <span className="text-[10px] text-slate-500 block">Nombre de participants</span>
+                  <span className="text-[10px] text-slate-500 block">Participants</span>
                   <span className="text-slate-200">{currentLead.participantsCount ? `${currentLead.participantsCount} pers.` : 'Inconnu'}</span>
                 </div>
               </div>
@@ -442,16 +480,16 @@ export const Conversations: React.FC = () => {
                 <Briefcase className="w-3.5 h-3.5 text-slate-400 mt-0.5" />
                 <div>
                   <span className="text-[10px] text-slate-500 block">Offre recommandée</span>
-                  <span className="text-slate-200">{currentLead.recommendedOffer || 'En cours de découverte'}</span>
+                  <span className="text-slate-200">{currentLead.recommendedOffer || 'En cours'}</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Statut HubSpot */}
+          {/* HubSpot CRM */}
           <div className="glass-panel p-4 rounded-2xl border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-300">Synchronisation HubSpot</span>
+              <span className="text-xs font-bold text-slate-300">HubSpot CRM</span>
               <span
                 className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
                   currentLead.hubspotSyncStatus === 'synced'

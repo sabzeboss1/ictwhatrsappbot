@@ -292,6 +292,181 @@ export class WhatsAppService {
 
     return { message, lead: updatedLead };
   }
+
+  /**
+   * Vérifie l'état de connexion de l'instance WhatsApp sur Evolution API
+   */
+  public async getInstanceStatus(): Promise<{
+    configured: boolean;
+    instanceName: string;
+    state: 'open' | 'close' | 'connecting' | 'unreachable';
+    connected: boolean;
+    phone?: string;
+    profileName?: string;
+    profilePictureUrl?: string;
+  }> {
+    const url = `${env.EVOLUTION_API_URL}/instance/connectionState/${env.EVOLUTION_INSTANCE_NAME}`;
+    try {
+      const res = await axios.get(url, {
+        headers: { apikey: env.EVOLUTION_API_KEY },
+        timeout: 4000,
+      });
+
+      const state = res.data?.instance?.state || 'close';
+      const connected = state === 'open';
+
+      // Récupérer le numéro si connecté
+      let phone: string | undefined = undefined;
+      let profileName: string | undefined = undefined;
+      let profilePictureUrl: string | undefined = undefined;
+
+      if (connected) {
+        try {
+          const profileRes = await axios.get(
+            `${env.EVOLUTION_API_URL}/chat/fetchProfile/${env.EVOLUTION_INSTANCE_NAME}`,
+            {
+              headers: { apikey: env.EVOLUTION_API_KEY },
+              timeout: 3000,
+            }
+          );
+          phone = profileRes.data?.number;
+          profileName = profileRes.data?.name;
+          profilePictureUrl = profileRes.data?.pictureUrl;
+        } catch {
+          // Ignorer si fetchProfile non supporté
+        }
+      }
+
+      return {
+        configured: true,
+        instanceName: env.EVOLUTION_INSTANCE_NAME,
+        state,
+        connected,
+        phone,
+        profileName,
+        profilePictureUrl,
+      };
+    } catch (err: any) {
+      return {
+        configured: false,
+        instanceName: env.EVOLUTION_INSTANCE_NAME,
+        state: 'unreachable',
+        connected: false,
+      };
+    }
+  }
+
+  /**
+   * Connecte l'instance WhatsApp : crée l'instance si besoin, configure le webhook, et renvoie le QR Code
+   */
+  public async connectInstance(webhookBaseUrl?: string): Promise<{
+    success: boolean;
+    state: string;
+    qrcode?: string;
+    base64?: string;
+    pairingCode?: string;
+    message?: string;
+  }> {
+    // 1. Tenter de créer l'instance si elle n'existe pas
+    try {
+      await axios.post(
+        `${env.EVOLUTION_API_URL}/instance/create`,
+        {
+          instanceName: env.EVOLUTION_INSTANCE_NAME,
+          token: 'ict_instance_token_2026',
+          qrcode: true,
+          integration: 'WHATSAPP-BAILEYS',
+        },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 6000,
+        }
+      );
+    } catch {
+      // Si l'instance existe déjà, ignorer l'erreur
+    }
+
+    // 2. Configurer le Webhook automatiquement
+    const targetWebhookUrl = webhookBaseUrl
+      ? `${webhookBaseUrl.replace(/\/+$/, '')}/webhooks/whatsapp`
+      : `http://backend:3001/webhooks/whatsapp`;
+
+    try {
+      await axios.post(
+        `${env.EVOLUTION_API_URL}/webhook/set/${env.EVOLUTION_INSTANCE_NAME}`,
+        {
+          webhook: {
+            enabled: true,
+            url: targetWebhookUrl,
+            headers: {
+              'X-Webhook-Secret': env.EVOLUTION_WEBHOOK_SECRET,
+            },
+            byEvents: false,
+            base64: false,
+            events: ['MESSAGES_UPSERT'],
+          },
+        },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        }
+      );
+    } catch (e: any) {
+      console.warn('[Evolution API] Avertissement config webhook:', e.message);
+    }
+
+    // 3. Obtenir le QR Code pour l'utilisateur
+    try {
+      const qrRes = await axios.get(
+        `${env.EVOLUTION_API_URL}/instance/connect/${env.EVOLUTION_INSTANCE_NAME}`,
+        {
+          headers: { apikey: env.EVOLUTION_API_KEY },
+          timeout: 8000,
+        }
+      );
+
+      const data = qrRes.data || {};
+      return {
+        success: true,
+        state: data.state || 'connecting',
+        qrcode: data.code || data.qrcode,
+        base64: data.base64,
+        pairingCode: data.pairingCode,
+        message: 'QR Code généré avec succès. Scannez-le avec WhatsApp.',
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        state: 'error',
+        message: `Erreur lors de la récupération du QR Code: ${err.message}`,
+      };
+    }
+  }
+
+  /**
+   * Déconnecte l'instance WhatsApp
+   */
+  public async disconnectInstance(): Promise<{ success: boolean; message: string }> {
+    try {
+      await axios.delete(
+        `${env.EVOLUTION_API_URL}/instance/logout/${env.EVOLUTION_INSTANCE_NAME}`,
+        {
+          headers: { apikey: env.EVOLUTION_API_KEY },
+          timeout: 6000,
+        }
+      );
+      return { success: true, message: 'Instance WhatsApp déconnectée.' };
+    } catch (err: any) {
+      return { success: false, message: `Erreur déconnexion: ${err.message}` };
+    }
+  }
 }
 
 export const whatsAppService = new WhatsAppService();
+

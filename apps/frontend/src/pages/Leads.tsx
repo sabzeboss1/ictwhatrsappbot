@@ -73,12 +73,12 @@ export const Leads: React.FC = () => {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {/* Titre */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight">Répertoire des Prospects</h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">Répertoire des Prospects</h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1">
             Tous les contacts WhatsApp qualifiés automatiquement par l'IA avec scoring et synchronisation CRM.
           </p>
         </div>
@@ -254,7 +254,7 @@ export const Leads: React.FC = () => {
 
       {/* Panneau latéral escamotable (Drawer) au clic sur un lead */}
       {selectedLead && (
-        <div className="fixed inset-y-0 right-0 w-96 bg-[#111b21] border-l border-slate-800 shadow-2xl z-50 flex flex-col p-6 overflow-y-auto animate-in slide-in-from-right duration-200">
+        <div className="fixed inset-y-0 right-0 w-full sm:w-96 bg-[#111b21] border-l border-slate-800 shadow-2xl z-50 flex flex-col p-5 sm:p-6 overflow-y-auto animate-in slide-in-from-right duration-200">
           <div className="flex items-center justify-between border-b border-slate-800 pb-4">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">Aperçu rapide</span>

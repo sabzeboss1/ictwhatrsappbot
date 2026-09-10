@@ -64,24 +64,24 @@ export const Overview: React.FC = () => {
   const COLORS = ['#64748b', '#38bdf8', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#059669'];
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6 sm:space-y-8">
       {/* En-tête */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
+          <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
             <span>Tableau de Bord Commercial</span>
             <span className="bg-emerald-500/20 text-emerald-400 text-xs px-2.5 py-1 rounded-full border border-emerald-500/30">
               Live IA
             </span>
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-xs sm:text-sm text-slate-400 mt-1">
             Performances du bot WhatsApp ICT, qualification automatique et entonnoir de conversion.
           </p>
         </div>
         <div className="flex items-center gap-3">
           <Link
             to="/conversations"
-            className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all text-sm"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all text-xs sm:text-sm"
           >
             <MessageSquare className="w-4 h-4" />
             <span>Ouvrir les conversations</span>

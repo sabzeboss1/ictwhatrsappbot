@@ -108,11 +108,11 @@ export const Simulator: React.FC = () => {
   };
 
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto space-y-6 sm:space-y-8">
       {/* En-tête */}
       <div>
-        <h1 className="text-2xl font-extrabold text-white tracking-tight flex items-center gap-3">
-          <Smartphone className="w-6 h-6 text-amber-400" />
+        <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight flex items-center gap-3">
+          <Smartphone className="w-5 h-5 sm:w-6 sm:h-6 text-amber-400 shrink-0" />
           <span>Simulateur Interactif WhatsApp</span>
         </h1>
         <p className="text-sm text-slate-400 mt-1">

@@ -92,4 +92,27 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
       }
     });
   });
+
+  // Routes d'administration de l'instance WhatsApp
+  fastify.register(async (protectedRoutes) => {
+    // État de l'instance WhatsApp
+    protectedRoutes.get('/api/whatsapp/status', async (request: FastifyRequest, reply: FastifyReply) => {
+      const status = await whatsAppService.getInstanceStatus();
+      return reply.send(status);
+    });
+
+    // Demande de connexion (génération du QR Code et configuration webhook)
+    protectedRoutes.post('/api/whatsapp/connect', async (request: FastifyRequest, reply: FastifyReply) => {
+      const host = request.headers.origin || request.headers.host;
+      const baseUrl = host ? (host.startsWith('http') ? host : `https://${host}`) : undefined;
+      const result = await whatsAppService.connectInstance(baseUrl);
+      return reply.send(result);
+    });
+
+    // Déconnexion de l'instance
+    protectedRoutes.post('/api/whatsapp/disconnect', async (request: FastifyRequest, reply: FastifyReply) => {
+      const result = await whatsAppService.disconnectInstance();
+      return reply.send(result);
+    });
+  });
 }
