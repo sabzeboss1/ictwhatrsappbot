@@ -116,8 +116,9 @@ export class AgentService {
       },
     ];
 
+    const model = env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
     const response = await this.anthropicClient.messages.create({
-      model: 'claude-3-5-haiku-20241022',
+      model,
       max_tokens: 1024,
       system: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues:\n${JSON.stringify(
         existingLeadData || {},

@@ -46,12 +46,21 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       // 4. Moteur IA
       let aiConfigured = false;
       let activeProvider = 'Simulateur heuristique démo';
-      if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 5) {
+      const anthropicModelDisplay = env.ANTHROPIC_MODEL.includes('4-5')
+        ? 'Claude Haiku 4.5'
+        : env.ANTHROPIC_MODEL.includes('sonnet')
+        ? 'Claude Sonnet'
+        : env.ANTHROPIC_MODEL;
+
+      if (env.AI_PROVIDER === 'anthropic' && env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 5) {
+        aiConfigured = true;
+        activeProvider = `Anthropic (${anthropicModelDisplay})`;
+      } else if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 5) {
         aiConfigured = true;
         activeProvider = 'OpenAI (gpt-4o-mini)';
       } else if (env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 5) {
         aiConfigured = true;
-        activeProvider = 'Anthropic Claude (3.5 Haiku)';
+        activeProvider = `Anthropic (${anthropicModelDisplay})`;
       }
 
       return reply.send({

@@ -73,7 +73,9 @@ services:
       DATABASE_URL: postgresql://ict_user:ict_password@postgres:5432/ict_whatsapp?schema=public
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_ict_whatsapp_2026}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       EVOLUTION_API_URL: http://evolution-api:8080
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-B6D711FCDE4D4FD5936544120E713976}

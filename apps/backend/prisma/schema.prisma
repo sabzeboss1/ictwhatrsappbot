@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -32,11 +32,11 @@ model Lead {
   isB2B                 Boolean   @default(false)
   isVip                 Boolean   @default(false)
   interactionLevel      String?   // repond_peu, dialogue_actif, fournit_toutes_infos
-  objections            String    @default("[]") // JSON stringified array of objections
+  objections            String[]  @default([])
   qualificationScore    Int       @default(0)
   leadStatus            String?   // Prospect froid, Prospect tiede, Prospect qualifie, Opportunite chaude
   nextStep              String?   // Nurturing, Continuer qualification, Landing Page, Paiement, Conseiller humain
-  aiDisabled            Boolean   @default(false) // Permet à un agent humain de prendre la main
+  aiDisabled            Boolean   @default(false)
   assignedAgentId       String?
   hubspotContactId      String?
   hubspotDealId         String?
@@ -55,9 +55,9 @@ model Message {
   lead              Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
   direction         String   // inbound | outbound
   content           String
-  messageType       String   @default("text") // text, image, audio, document, location, interactive, unknown
-  whatsappMessageId String?  @unique  // clé anti-doublon
-  sentByAgentId     String?  // null si envoyé par l'IA, id agent si envoyé manuellement
+  messageType       String   @default("text")
+  whatsappMessageId String?  @unique
+  sentByAgentId     String?
   createdAt         DateTime @default(now())
 }
 
@@ -73,9 +73,9 @@ model User {
 
 model AuditLog {
   id        String   @id @default(cuid())
-  actorId   String?  // userId ou "system"
-  action    String   // lead.status_changed, message.sent_manually, lead.takeover, hubspot.resync
+  actorId   String?
+  action    String
   entityId  String
-  metadata  String?  // JSON string
+  metadata  Json?
   createdAt DateTime @default(now())
 }

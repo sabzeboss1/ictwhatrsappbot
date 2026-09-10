@@ -14,6 +14,7 @@ const envSchema = z.object({
   AI_PROVIDER: z.enum(['openai', 'anthropic']).default('openai'),
   OPENAI_API_KEY: z.string().optional().default(''),
   ANTHROPIC_API_KEY: z.string().optional().default(''),
+  ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 
   // Evolution API
   EVOLUTION_API_URL: z.string().default('http://localhost:8080'),
