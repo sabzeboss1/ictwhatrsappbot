@@ -1,0 +1,61 @@
+# ==============================================================================
+# Configuration Nginx pour VPS avec WordPress existant
+# ==============================================================================
+# Ce fichier permet de faire cohabiter votre site WordPress existant avec
+# l'application ICT WhatsApp AI sur le même serveur sans aucun conflit de port.
+#
+# Emplacement habituel sur Ubuntu / Debian :
+# /etc/nginx/sites-available/ict-bot.conf
+# Puis lien symbolique :
+# ln -s /etc/nginx/sites-available/ict-bot.conf /etc/nginx/sites-enabled/
+# sudo nginx -t && sudo systemctl reload nginx
+#
+# Pour activer le SSL automatique Let's Encrypt :
+# sudo certbot --nginx -d bot.votre-domaine.com
+# ==============================================================================
+
+server {
+    listen 80;
+    server_name bot.votre-domaine.com; # Remplacez par votre sous-domaine
+
+    # 1. Redirection du Frontend (Dashboard React)
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # 2. Redirection des routes API Backend
+    location /api/ {
+        proxy_pass http://127.0.0.1:3001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 3. Redirection des Webhooks WhatsApp (Evolution API -> Backend)
+    location /webhooks/ {
+        proxy_pass http://127.0.0.1:3001/webhooks/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 4. Redirection des WebSockets temps réel (Socket.IO)
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:3001/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}

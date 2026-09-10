@@ -1,0 +1,26 @@
+{
+  "name": "ict-whatsapp-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ICT WhatsApp AI - Bot de qualification de leads WhatsApp propulsé par IA",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:backend": "npm --workspace=apps/backend run dev",
+    "dev:frontend": "npm --workspace=apps/frontend run dev",
+    "dev": "npm run dev:backend",
+    "build": "npm run build --workspaces",
+    "test": "npm --workspace=apps/backend run test"
+  },
+  "keywords": [
+    "whatsapp",
+    "ai",
+    "lead-qualification",
+    "fastify",
+    "react",
+    "hubspot"
+  ],
+  "author": "Inside Cameroon Tourism",
+  "license": "UNLICENSED"
+}

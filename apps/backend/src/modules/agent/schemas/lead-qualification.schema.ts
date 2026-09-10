@@ -1,0 +1,45 @@
+import { z } from 'zod';
+
+export const LeadQualificationOutputSchema = z.object({
+  whatsapp_message: z.string(),
+  conversation_stage: z.enum([
+    'NEW_CONTACT',
+    'DISCOVERY',
+    'QUALIFICATION',
+    'RECOMMENDATION',
+    'OBJECTION_HANDLING',
+    'CONVERSION',
+    'CUSTOMER',
+  ]),
+  intent: z.enum(['Decouverte', 'Information', 'Reservation', 'SAV', 'Autre']),
+  customer_type: z.enum([
+    'Particulier',
+    'Couple',
+    'Famille',
+    'Groupe',
+    'Entreprise',
+    'Ecole',
+    'ONG',
+    'Administration',
+    'Inconnu',
+  ]),
+  need: z.string().nullable().optional(),
+  participants_count: z.number().int().nullable().optional(),
+  preferred_date: z.string().nullable().optional(),
+  budget: z.string().nullable().optional(),
+  recommended_offer: z.string().nullable().optional(),
+  product_identified: z.boolean().default(false),
+  purchase_intent: z.enum(['information', 'interesse', 'demande_prix', 'veut_reserver']),
+  availability_confirmed: z.boolean().default(false),
+  product_standard: z.boolean().default(false),
+  custom_request: z.boolean().default(false),
+  is_b2b: z.boolean().default(false),
+  is_vip: z.boolean().default(false),
+  interaction_level: z.enum(['repond_peu', 'dialogue_actif', 'fournit_toutes_infos']),
+  objections: z.array(z.string()).default([]),
+  email: z.string().nullable().optional(),
+  first_name: z.string().nullable().optional(),
+  last_name: z.string().nullable().optional(),
+});
+
+export type LeadQualificationOutput = z.infer<typeof LeadQualificationOutputSchema>;
