@@ -63,5 +63,14 @@ export async function leadsRoutes(fastify: FastifyInstance) {
         return reply.send(result);
       }
     );
+
+    // Réinitialiser la qualification d'un lead (utile pour recommencer un test)
+    protectedRoutes.post(
+      '/api/leads/:id/reset',
+      async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+        const result = await leadsService.resetLead(request.params.id, request.user?.userId);
+        return reply.send(result);
+      }
+    );
   });
 }

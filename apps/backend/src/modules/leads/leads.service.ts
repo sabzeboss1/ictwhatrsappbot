@@ -159,6 +159,40 @@ export class LeadsService {
 
     return result;
   }
+
+  public async resetLead(id: string, actorId?: string) {
+    const updated = await prisma.lead.update({
+      where: { id },
+      data: {
+        conversationStage: 'DISCOVERY',
+        participantsCount: null,
+        preferredDate: null,
+        budget: null,
+        customerType: 'Particulier',
+        isB2B: false,
+        isVip: false,
+        recommendedOffer: null,
+        productIdentified: false,
+        purchaseIntent: 'information',
+        qualificationScore: 10,
+        leadStatus: 'Nouveau',
+        nextStep: 'Qualification',
+        aiDisabled: false,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: actorId || 'system',
+        action: 'lead.reset',
+        entityId: id,
+        metadata: JSON.stringify({ reset: true }),
+      },
+    });
+
+    emitLeadUpdated(updated);
+    return updated;
+  }
 }
 
 export const leadsService = new LeadsService();

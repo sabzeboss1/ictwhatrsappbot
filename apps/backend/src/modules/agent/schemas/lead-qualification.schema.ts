@@ -10,8 +10,8 @@ export const LeadQualificationOutputSchema = z.object({
     'OBJECTION_HANDLING',
     'CONVERSION',
     'CUSTOMER',
-  ]),
-  intent: z.enum(['Decouverte', 'Information', 'Reservation', 'SAV', 'Autre']),
+  ]).catch('QUALIFICATION'),
+  intent: z.enum(['Decouverte', 'Information', 'Reservation', 'SAV', 'Autre']).catch('Information'),
   customer_type: z.enum([
     'Particulier',
     'Couple',
@@ -22,24 +22,38 @@ export const LeadQualificationOutputSchema = z.object({
     'ONG',
     'Administration',
     'Inconnu',
-  ]),
+  ]).catch('Particulier'),
   need: z.string().nullable().optional(),
-  participants_count: z.number().int().nullable().optional(),
+  participants_count: z.preprocess((val) => {
+    if (typeof val === 'string') {
+      const num = parseInt(val.replace(/\D/g, ''), 10);
+      return isNaN(num) ? null : num;
+    }
+    return val;
+  }, z.number().int().nullable().optional()),
   preferred_date: z.string().nullable().optional(),
-  budget: z.string().nullable().optional(),
+  budget: z.preprocess((val) => {
+    if (typeof val === 'number') return `${val.toLocaleString('fr-FR')} FCFA`;
+    return val;
+  }, z.string().nullable().optional()),
   recommended_offer: z.string().nullable().optional(),
   product_identified: z.boolean().default(false),
-  purchase_intent: z.enum(['information', 'interesse', 'demande_prix', 'veut_reserver']),
+  purchase_intent: z.enum(['information', 'interesse', 'demande_prix', 'veut_reserver']).catch('information'),
   availability_confirmed: z.boolean().default(false),
   product_standard: z.boolean().default(false),
   custom_request: z.boolean().default(false),
   is_b2b: z.boolean().default(false),
   is_vip: z.boolean().default(false),
-  interaction_level: z.enum(['repond_peu', 'dialogue_actif', 'fournit_toutes_infos']),
-  objections: z.array(z.string()).default([]),
+  interaction_level: z.enum(['repond_peu', 'dialogue_actif', 'fournit_toutes_infos']).catch('dialogue_actif'),
+  objections: z.preprocess((val) => {
+    if (typeof val === 'string') return [val];
+    if (Array.isArray(val)) return val;
+    return [];
+  }, z.array(z.string()).default([])),
   email: z.string().nullable().optional(),
   first_name: z.string().nullable().optional(),
   last_name: z.string().nullable().optional(),
 });
 
 export type LeadQualificationOutput = z.infer<typeof LeadQualificationOutputSchema>;
+

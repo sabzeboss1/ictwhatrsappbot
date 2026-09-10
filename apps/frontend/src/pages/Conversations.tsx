@@ -143,6 +143,19 @@ export const Conversations: React.FC = () => {
     }
   };
 
+  // Réinitialiser la qualification du lead
+  const handleResetLead = async () => {
+    if (!currentLead) return;
+    if (!confirm('Voulez-vous réinitialiser la qualification de ce prospect pour recommencer le test ?')) return;
+    try {
+      await api.post(`/api/leads/${currentLead.id}/reset`);
+      queryClient.invalidateQueries({ queryKey: ['lead', currentLead.id] });
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    } catch (err) {
+      console.error('Erreur réinitialisation:', err);
+    }
+  };
+
   const filteredConversations = (conversations || []).filter((c: any) => {
     const q = search.toLowerCase();
     const name = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
@@ -322,6 +335,15 @@ export const Conversations: React.FC = () => {
                       <span className="sm:hidden">IA</span>
                     </>
                   )}
+                </button>
+
+                <button
+                  onClick={handleResetLead}
+                  className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all border bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-rose-500/20 hover:text-rose-300 hover:border-rose-500/40"
+                  title="Réinitialiser la qualification de ce prospect pour recommencer le test"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Reset</span>
                 </button>
 
                 <button

@@ -141,13 +141,53 @@ export class WhatsAppService {
 
     emitNewMessage(inboundMessage, lead);
 
-    // 4. Si l'humain a pris la main, ne pas faire répondre l'IA
+    // 4. Commande de réinitialisation directe par l'utilisateur (utile pour les tests)
+    const cleanLower = text.trim().toLowerCase();
+    if (cleanLower === 'reset' || cleanLower === 'recommencer' || cleanLower === 'menu' || cleanLower === '/reset') {
+      const resetReply = "🔄 *Conversation réinitialisée !*\n\nBonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nQuel type d'expérience touristique souhaitez-vous vivre au Cameroun (séjour balnéaire à Kribi, écotourisme en pirogue à Ebogo, ou ascension du Mont Cameroun) ?";
+
+      const updatedLead = await prisma.lead.update({
+        where: { id: lead.id },
+        data: {
+          conversationStage: 'DISCOVERY',
+          participantsCount: null,
+          preferredDate: null,
+          budget: null,
+          customerType: 'Particulier',
+          isB2B: false,
+          isVip: false,
+          recommendedOffer: null,
+          productIdentified: false,
+          purchaseIntent: 'information',
+          qualificationScore: 10,
+          leadStatus: 'Nouveau',
+          nextStep: 'Qualification',
+          aiDisabled: false,
+        },
+      });
+
+      const outboundMessage = await prisma.message.create({
+        data: {
+          leadId: lead.id,
+          direction: 'outbound',
+          content: resetReply,
+          messageType: 'text',
+        },
+      });
+
+      await this.sendWhatsAppMessage(phone, resetReply);
+      emitNewMessage(outboundMessage, updatedLead);
+      emitLeadUpdated(updatedLead);
+      return { duplicate: false, processedByAI: true };
+    }
+
+    // 5. Si l'humain a pris la main, ne pas faire répondre l'IA
     if (lead.aiDisabled) {
       console.log(`[WhatsApp] Lead ${lead.phone} en prise de main humaine: réponse IA suspendue.`);
       return { duplicate: false, processedByAI: false };
     }
 
-    // 5. Exécution du workflow IA
+    // 6. Exécution du workflow IA
     await this.processLeadThroughAI({
       leadId: lead.id,
       inboundText: text,
@@ -192,6 +232,14 @@ export class WhatsAppService {
     // Calcul du score et du routage selon la logique n8n d'origine
     const scoreResult = computeScore(aiOutput);
 
+    // Nettoyage de sécurité: si le nombre de participants en base était anormal (ex: 600 issu du bug budget), le corriger
+    const cleanParticipants =
+      aiOutput.participants_count !== undefined && aiOutput.participants_count !== null
+        ? aiOutput.participants_count
+        : lead.participantsCount && lead.participantsCount < 150
+        ? lead.participantsCount
+        : null;
+
     // Mise à jour du Lead
     const updatedLead = await prisma.lead.update({
       where: { id: leadId },
@@ -200,7 +248,7 @@ export class WhatsAppService {
         intent: aiOutput.intent,
         customerType: aiOutput.customer_type,
         need: aiOutput.need || lead.need,
-        participantsCount: aiOutput.participants_count ?? lead.participantsCount,
+        participantsCount: cleanParticipants,
         preferredDate: aiOutput.preferred_date || lead.preferredDate,
         budget: aiOutput.budget || lead.budget,
         recommendedOffer: aiOutput.recommended_offer || lead.recommendedOffer,
