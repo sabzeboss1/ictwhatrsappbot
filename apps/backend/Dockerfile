@@ -9,7 +9,7 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY prisma ./prisma
 
-RUN npx prisma generate
+RUN cp prisma/schema.postgres.prisma prisma/schema.prisma && npx prisma generate
 RUN npm run build
 
 FROM node:22-alpine AS runner
