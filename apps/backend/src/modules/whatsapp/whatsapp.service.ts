@@ -24,6 +24,7 @@ export class WhatsAppService {
     const url = `${env.EVOLUTION_API_URL}/message/sendText/${env.EVOLUTION_INSTANCE_NAME}`;
 
     try {
+      console.log(`[WhatsApp API] Envoi message sortant à ${cleanNumber}...`);
       const response = await axios.post(
         url,
         {
@@ -31,11 +32,6 @@ export class WhatsAppService {
           text: text,
           textMessage: {
             text,
-          },
-          options: {
-            delay: 1200,
-            presence: 'composing',
-            linkPreview: false,
           },
         },
         {
@@ -46,12 +42,12 @@ export class WhatsAppService {
           timeout: 10000,
         }
       );
-      console.log(`✓ [WhatsApp API] Réponse envoyée avec succès à ${cleanNumber}`);
+      console.log(`✓ [WhatsApp API] Réponse délivrée à ${cleanNumber}:`, JSON.stringify(response.data));
       return response.data;
     } catch (err: any) {
       console.error(
         `✗ [WhatsApp API] Échec envoi à ${phone}:`,
-        err.response?.data || err.message
+        JSON.stringify(err.response?.data || err.message)
       );
       return { simulated: true, message: 'Message enregistré localement', error: err.message };
     }

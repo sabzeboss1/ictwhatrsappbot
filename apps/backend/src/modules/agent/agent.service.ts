@@ -35,12 +35,12 @@ export class AgentService {
   }): Promise<LeadQualificationOutput> {
     const { inboundText, conversationHistory, existingLeadData } = params;
 
-    // 1. Tenter via Anthropic si configuré
-    if (env.AI_PROVIDER === 'anthropic' && this.anthropicClient) {
+    // 1. Tenter via Anthropic si configuré (soit explicitement, soit si seule clé disponible)
+    if (this.anthropicClient && (env.AI_PROVIDER === 'anthropic' || !this.openaiClient)) {
       try {
         return await this.callAnthropic(inboundText, conversationHistory, existingLeadData);
-      } catch (err) {
-        console.error('[AgentService] Erreur Anthropic, tentative de secours...', err);
+      } catch (err: any) {
+        console.error('[AgentService] Erreur Anthropic Claude:', err.message || err);
       }
     }
 
@@ -48,13 +48,13 @@ export class AgentService {
     if (this.openaiClient && (env.AI_PROVIDER === 'openai' || !this.anthropicClient)) {
       try {
         return await this.callOpenAI(inboundText, conversationHistory, existingLeadData);
-      } catch (err) {
-        console.error('[AgentService] Erreur OpenAI, tentative de secours...', err);
+      } catch (err: any) {
+        console.error('[AgentService] Erreur OpenAI:', err.message || err);
       }
     }
 
     // 3. Fallback Heuristique / Simulateur si aucune clé n'est fournie ou si les APIs sont inaccessibles
-    console.log('[AgentService] Utilisation du moteur de qualification heuristique intégré (Mode Démo/Dev)');
+    console.warn('[AgentService] ATTENTION: Utilisation du simulateur heuristique par défaut (Claude non joint)');
     return this.mockQualifyMessage(inboundText, conversationHistory, existingLeadData);
   }
 
@@ -68,14 +68,14 @@ export class AgentService {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues sur ce lead:\n${JSON.stringify(
+        content: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
           existingLeadData || {},
           null,
           2
-        )}\nTu dois impérativement répondre au format JSON strict conforme au schéma demandé.`,
+        )}`,
       },
       ...history.map((h) => ({
-        role: (h.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        role: h.role,
         content: h.content,
       })),
       {
@@ -105,18 +105,44 @@ export class AgentService {
   ): Promise<LeadQualificationOutput> {
     if (!this.anthropicClient) throw new Error('Anthropic non configuré');
 
-    const formattedMessages = [
-      ...history.map((h) => ({
-        role: (h.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
-        content: h.content,
-      })),
-      {
-        role: 'user' as const,
-        content: inboundText,
-      },
-    ];
+    // Nettoyer et alterner strictement les rôles pour l'API Anthropic
+    const rawMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+
+    // Filtrer l'historique pour éviter les doublons avec le message entrant
+    const filteredHistory = [...history];
+    if (
+      filteredHistory.length > 0 &&
+      filteredHistory[filteredHistory.length - 1].role === 'user' &&
+      filteredHistory[filteredHistory.length - 1].content.trim() === inboundText.trim()
+    ) {
+      filteredHistory.pop();
+    }
+
+    for (const h of filteredHistory) {
+      if (!h.content || !h.content.trim()) continue;
+      const role = h.role === 'user' ? 'user' : 'assistant';
+      if (rawMessages.length > 0 && rawMessages[rawMessages.length - 1].role === role) {
+        rawMessages[rawMessages.length - 1].content += '\n' + h.content;
+      } else {
+        rawMessages.push({ role, content: h.content });
+      }
+    }
+
+    // Ajouter le message entrant
+    if (rawMessages.length > 0 && rawMessages[rawMessages.length - 1].role === 'user') {
+      rawMessages[rawMessages.length - 1].content += '\n' + inboundText;
+    } else {
+      rawMessages.push({ role: 'user', content: inboundText });
+    }
+
+    // Anthropic exige impérativement que le premier message soit de rôle 'user'
+    if (rawMessages.length > 0 && rawMessages[0].role !== 'user') {
+      rawMessages.shift();
+    }
 
     const model = env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+    console.log(`[AgentService] Envoi de la requête à Claude (${model})...`);
+
     const response = await this.anthropicClient.messages.create({
       model,
       max_tokens: 1024,
@@ -125,7 +151,7 @@ export class AgentService {
         null,
         2
       )}\nTu dois impérativement renvoyer UNIQUEMENT un objet JSON valide correspondant au schéma LeadQualificationOutputSchema.`,
-      messages: formattedMessages,
+      messages: rawMessages,
     });
 
     const block = response.content[0];
@@ -137,6 +163,7 @@ export class AgentService {
     if (!jsonMatch) throw new Error('Impossible de trouver un JSON dans la réponse Anthropic');
 
     const parsed = JSON.parse(jsonMatch[0]);
+    console.log('[AgentService] Réponse Claude obtenue avec succès !');
     return LeadQualificationOutputSchema.parse(parsed);
   }
 
