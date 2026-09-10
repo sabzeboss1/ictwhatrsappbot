@@ -40,6 +40,7 @@ services:
     environment:
       SERVER_URL: http://evolution-api:8080
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-B6D711FCDE4D4FD5936544120E713976}
+      WPP_LID_MODE: "false"
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://ict_user:ict_password@postgres:5432/ict_whatsapp?schema=evolution
       DATABASE_ENABLED: "true"

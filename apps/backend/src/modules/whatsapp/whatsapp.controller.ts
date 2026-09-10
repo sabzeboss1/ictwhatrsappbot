@@ -35,6 +35,12 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           fromMe = Boolean(key.fromMe);
           whatsappMessageId = key.id;
           rawPhone = key.remoteJid || '';
+          if (rawPhone.includes('@lid')) {
+            const realJid = key.participant || data.participant || data.sender;
+            if (realJid && realJid.includes('@s.whatsapp.net')) {
+              rawPhone = realJid;
+            }
+          }
           pushName = data.pushName;
 
           const msg = data.message || {};

@@ -12,6 +12,10 @@ export class WhatsAppService {
    * ex: 237699112233@s.whatsapp.net -> +237699112233
    */
   public normalizePhone(jid: string): string {
+    if (jid.includes('@lid')) {
+      // Si c'est un Linked ID, conserver l'identifiant pour garantir le routage
+      return jid;
+    }
     const rawNumber = jid.split('@')[0].replace(/[^\d+]/g, '');
     return rawNumber.startsWith('+') ? rawNumber : `+${rawNumber}`;
   }
@@ -20,15 +24,21 @@ export class WhatsAppService {
    * Envoie un message WhatsApp via l'API Evolution
    */
   public async sendWhatsAppMessage(phone: string, text: string): Promise<any> {
-    const cleanNumber = phone.replace(/[^\d]/g, '');
+    // Si c'est un @lid, envoyer le JID complet. Sinon, envoyer le numéro nettoyé.
+    const target = phone.includes('@lid')
+      ? phone
+      : phone.includes('@s.whatsapp.net')
+      ? phone.split('@')[0].replace(/[^\d]/g, '')
+      : phone.replace(/[^\d]/g, '');
+
     const url = `${env.EVOLUTION_API_URL}/message/sendText/${env.EVOLUTION_INSTANCE_NAME}`;
 
     try {
-      console.log(`[WhatsApp API] Envoi message sortant à ${cleanNumber}...`);
+      console.log(`[WhatsApp API] Envoi message sortant à ${target}...`);
       const response = await axios.post(
         url,
         {
-          number: cleanNumber,
+          number: target,
           text: text,
           textMessage: {
             text,
@@ -42,7 +52,7 @@ export class WhatsAppService {
           timeout: 10000,
         }
       );
-      console.log(`✓ [WhatsApp API] Réponse délivrée à ${cleanNumber}:`, JSON.stringify(response.data));
+      console.log(`✓ [WhatsApp API] Réponse délivrée à ${target}:`, JSON.stringify(response.data));
       return response.data;
     } catch (err: any) {
       console.error(
