@@ -85,12 +85,16 @@ export class LeadsService {
 
     if (!lead) return null;
 
-    // Parser le champ objections JSON si stocké sous forme de string
+    // Gérer le champ objections (Array natif PostgreSQL ou JSON stringifié SQLite)
     let parsedObjections: string[] = [];
-    try {
-      parsedObjections = JSON.parse(lead.objections || '[]');
-    } catch {
-      parsedObjections = [];
+    if (Array.isArray(lead.objections)) {
+      parsedObjections = lead.objections;
+    } else if (typeof (lead as any).objections === 'string') {
+      try {
+        parsedObjections = JSON.parse((lead as any).objections || '[]');
+      } catch {
+        parsedObjections = [];
+      }
     }
 
     return {

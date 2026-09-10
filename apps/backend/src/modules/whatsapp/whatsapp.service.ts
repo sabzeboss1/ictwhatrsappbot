@@ -201,7 +201,7 @@ export class WhatsAppService {
         isB2B: aiOutput.is_b2b,
         isVip: aiOutput.is_vip,
         interactionLevel: aiOutput.interaction_level,
-        objections: JSON.stringify(aiOutput.objections || []),
+        objections: (aiOutput.objections || []) as any,
         qualificationScore: scoreResult.score,
         leadStatus: scoreResult.leadStatus,
         nextStep: scoreResult.nextStep,
