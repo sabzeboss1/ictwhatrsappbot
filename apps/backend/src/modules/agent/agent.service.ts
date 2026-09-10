@@ -140,19 +140,42 @@ export class AgentService {
       rawMessages.shift();
     }
 
-    const model = env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
-    console.log(`[AgentService] Envoi de la requête à Claude (${model})...`);
+    const candidateModels = [
+      env.ANTHROPIC_MODEL,
+      'claude-3-5-haiku-20241022',
+      'claude-3-5-sonnet-20241022',
+      'claude-haiku-4-5-20251001',
+    ].filter(Boolean);
 
-    const response = await this.anthropicClient.messages.create({
-      model,
-      max_tokens: 1024,
-      system: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues:\n${JSON.stringify(
-        existingLeadData || {},
-        null,
-        2
-      )}\nTu dois impérativement renvoyer UNIQUEMENT un objet JSON valide correspondant au schéma LeadQualificationOutputSchema.`,
-      messages: rawMessages,
-    });
+    let response: any = null;
+    let lastError: any = null;
+
+    for (const m of candidateModels) {
+      try {
+        console.log(`[AgentService] Appel Claude avec modèle: ${m}...`);
+        response = await this.anthropicClient.messages.create({
+          model: m,
+          max_tokens: 1024,
+          system: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
+            existingLeadData || {},
+            null,
+            2
+          )}\nTu dois impérativement renvoyer UNIQUEMENT un objet JSON valide correspondant au schéma LeadQualificationOutputSchema.`,
+          messages: rawMessages,
+        });
+        if (response) {
+          console.log(`✓ [AgentService] Réponse Claude générée avec succès via ${m} !`);
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[AgentService] Modèle ${m} non disponible (${err.message}), tentative modèle suivant...`);
+      }
+    }
+
+    if (!response) {
+      throw lastError || new Error('Tous les modèles Claude ont échoué');
+    }
 
     const block = response.content[0];
     if (block.type !== 'text') throw new Error('Réponse Anthropic non textuelle');
@@ -163,7 +186,6 @@ export class AgentService {
     if (!jsonMatch) throw new Error('Impossible de trouver un JSON dans la réponse Anthropic');
 
     const parsed = JSON.parse(jsonMatch[0]);
-    console.log('[AgentService] Réponse Claude obtenue avec succès !');
     return LeadQualificationOutputSchema.parse(parsed);
   }
 
@@ -178,40 +200,34 @@ export class AgentService {
   ): LeadQualificationOutput {
     const textLower = inboundText.toLowerCase();
 
-    // Détection type prospect
-    let customer_type: LeadQualificationOutput['customer_type'] = existingLeadData?.customerType || 'Particulier';
-    let is_b2b = existingLeadData?.isB2B || false;
-    let is_vip = existingLeadData?.isVip || false;
-
-    if (textLower.match(/entreprise|société|collaborateur|team building|séminaire|b2b|direction|mtn|orange|total/)) {
-      customer_type = 'Entreprise';
-      is_b2b = true;
-    } else if (textLower.match(/ong|association|humanitaire|mission/)) {
-      customer_type = 'ONG';
-    } else if (textLower.match(/école|ecole|université|élèves|étudiants/)) {
-      customer_type = 'Ecole';
-    } else if (textLower.match(/groupe|amis|famille|enfants/)) {
-      customer_type = textLower.includes('famille') ? 'Famille' : 'Groupe';
-    } else if (textLower.match(/couple|mari|femme|conjoint|lune de miel/)) {
-      customer_type = 'Couple';
-    }
-
-    if (textLower.match(/vip|exclusif|luxe|privatisation/)) {
-      is_vip = true;
-    }
-
-    // Détection participants
+    // Extraction nombre de participants
     let participants_count = existingLeadData?.participantsCount || null;
-    const countMatch = textLower.match(/(\d{1,3})\s*(personnes|pers|participants|collaborateurs|élèves|adultes)?/);
+    const countMatch = textLower.match(/(\d+)\s*(personnes|pers|pax|gens|collaborateurs|adultes)?/);
     if (countMatch && parseInt(countMatch[1]) > 0) {
       participants_count = parseInt(countMatch[1]);
     }
 
-    // Détection dates
+    // Détection date
     let preferred_date = existingLeadData?.preferredDate || null;
-    const dateMatch = textLower.match(/(le\s+\d{1,2}\s+[a-z]+|\d{1,2}[\/-]\d{1,2}([\/-]\d{2,4})?|vacances|décembre|novembre|octobre|août|juillet|janvier|février|mars|avril|mai|juin|septembre)/);
+    const dateMatch = textLower.match(/(décembre|decembre|janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|\d{1,2}\/\d{1,2})/);
     if (dateMatch) {
       preferred_date = dateMatch[0];
+    }
+
+    // Détection type de client
+    let customer_type: LeadQualificationOutput['customer_type'] = existingLeadData?.customerType || 'Particulier';
+    let is_b2b = existingLeadData?.isB2B || false;
+    let is_vip = existingLeadData?.isVip || false;
+
+    if (textLower.match(/entreprise|société|societe|collègues|collegues|team building|séminaire|seminaire/)) {
+      customer_type = 'Entreprise';
+      is_b2b = true;
+    } else if (textLower.match(/famille|enfants|bébé|bebe|parents/)) {
+      customer_type = 'Famille';
+    } else if (textLower.match(/couple|mari|femme|amoureux|lune de miel/)) {
+      customer_type = 'Couple';
+    } else if (textLower.match(/groupe|amis|association/)) {
+      customer_type = 'Groupe';
     }
 
     // Détection intention d'achat
@@ -254,12 +270,16 @@ export class AgentService {
       conversation_stage = 'QUALIFICATION';
     }
 
-    // Génération du message WhatsApp
+    // Génération du message WhatsApp intelligent et progressif
     let whatsapp_message = '';
     if (is_b2b || (participants_count && participants_count > 20)) {
       whatsapp_message = `Bonjour et merci d'avoir contacté Inside Cameroon Tourism ! 🇨🇲\n\nNous serions ravis d'organiser cet événement pour votre groupe de ${participants_count || 'collaborateurs'}. Pour vous concevoir une offre d'entreprise sur-mesure, quel est l'objectif principal de cette sortie ?`;
     } else if (purchase_intent === 'veut_reserver') {
-      whatsapp_message = `Excellente nouvelle ! L'offre ${recommended_offer || 'choisie'} est disponible à la date souhaitée. Souhaitez-vous finaliser votre réservation par paiement sécurisé ou recevoir votre récapitulatif ?`;
+      whatsapp_message = `Excellente nouvelle ! L'offre "${recommended_offer || 'choisie'}" est disponible. Souhaitez-vous finaliser votre réservation par paiement sécurisé ou recevoir votre récapitulatif ?`;
+    } else if (participants_count && !preferred_date) {
+      whatsapp_message = `C'est bien noté pour votre groupe de ${participants_count} personnes pour l'expérience "${recommended_offer || 'Kribi'}". À quelle date ou période souhaitez-vous organiser ce voyage ?`;
+    } else if (participants_count && preferred_date) {
+      whatsapp_message = `Parfait, nous réservons le créneau pour ${participants_count} personnes vers le ${preferred_date}. Avez-vous une estimation de votre budget global pour ce séjour ?`;
     } else if (product_identified) {
       whatsapp_message = `C'est une magnifique destination ! L'expérience "${recommended_offer}" comprend le transport, l'hébergement de charme et les guides locaux certifiés. Pour combien de personnes prévoyez-vous cette aventure ?`;
     } else {
