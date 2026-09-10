@@ -28,13 +28,14 @@ export class WhatsAppService {
         url,
         {
           number: cleanNumber,
+          text: text,
+          textMessage: {
+            text,
+          },
           options: {
             delay: 1200,
             presence: 'composing',
             linkPreview: false,
-          },
-          textMessage: {
-            text,
           },
         },
         {
@@ -45,10 +46,14 @@ export class WhatsAppService {
           timeout: 10000,
         }
       );
+      console.log(`✓ [WhatsApp API] Réponse envoyée avec succès à ${cleanNumber}`);
       return response.data;
     } catch (err: any) {
-      console.warn(`[WhatsApp API] Envoi à ${phone} simulé (Evolution API non joignable: ${err.message})`);
-      return { simulated: true, message: 'Message enregistré localement' };
+      console.error(
+        `✗ [WhatsApp API] Échec envoi à ${phone}:`,
+        err.response?.data || err.message
+      );
+      return { simulated: true, message: 'Message enregistré localement', error: err.message };
     }
   }
 
