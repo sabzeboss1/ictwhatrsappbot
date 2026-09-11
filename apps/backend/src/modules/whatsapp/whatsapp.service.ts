@@ -40,35 +40,48 @@ export class WhatsAppService {
     return `+${digits}`;
   }
 
+  private isValidE164Digits(digits: string): boolean {
+    // Un vrai numéro WhatsApp international a entre 9 et 15 chiffres et ne commence JAMAIS par 00 ou 0
+    return /^\d{9,15}$/.test(digits) && !digits.startsWith('0');
+  }
+
   /**
    * Résout un LID (Linked ID) vers un vrai numéro de téléphone via l'API Evolution.
    * Utilise un cache en mémoire pour éviter les appels répétés.
    * 
-   * Stratégie de résolution :
-   * 1. Cache mémoire
-   * 2. Champs participant/sender du webhook (si fournis)
-   * 3. API Evolution fetchContacts
-   * 4. Fallback: garder le LID tel quel
+   * Si aucun vrai numéro international n'est trouvé, CONSERVE LE JID LID NATIF.
+   * WhatsApp et Evolution API savent délivrer les messages directement sur un JID LID (@lid) !
    */
   public async resolveLidToPhone(lid: string, participantHint?: string): Promise<string> {
-    // 1. Cache
+    // 1. Cache (invalider si c'était un ancien numéro corrompu commençant par +000)
     const cached = this.lidCache.get(lid);
     if (cached) {
-      console.log(`[LID Cache] Résolu depuis le cache: ${lid} → ${cached}`);
-      return cached;
+      if (cached.includes('@lid')) {
+        return cached;
+      }
+      const digits = cached.replace(/\D/g, '');
+      if (this.isValidE164Digits(digits)) {
+        console.log(`[LID Cache] Résolu depuis le cache: ${lid} → ${cached}`);
+        return cached;
+      } else {
+        console.log(`[LID Cache] Entrée corrompue invalidée: ${lid} → ${cached}`);
+        this.lidCache.delete(lid);
+      }
     }
 
     // 2. Indice du webhook (participant ou sender avec @s.whatsapp.net)
     if (participantHint && participantHint.includes('@s.whatsapp.net')) {
-      const phone = this.normalizePhone(participantHint);
-      this.lidCache.set(lid, phone);
-      console.log(`[LID Résolution] Via participant hint: ${lid} → ${phone}`);
-      return phone;
+      const hintDigits = participantHint.split('@')[0].replace(/\D/g, '');
+      if (this.isValidE164Digits(hintDigits)) {
+        const phone = this.normalizePhone(participantHint);
+        this.lidCache.set(lid, phone);
+        console.log(`[LID Résolution] Via participant hint: ${lid} → ${phone}`);
+        return phone;
+      }
     }
 
-    // 3. Tenter via l'API Evolution
+    // 3. Tenter via l'API Evolution findContacts
     try {
-      const lidNumber = lid.split('@')[0];
       const res = await axios.post(
         `${env.EVOLUTION_API_URL}/chat/findContacts/${env.EVOLUTION_INSTANCE_NAME}`,
         { where: { id: lid } },
@@ -84,13 +97,16 @@ export class WhatsAppService {
       const contacts = res.data;
       if (Array.isArray(contacts) && contacts.length > 0) {
         const contact = contacts[0];
-        // Le contact peut avoir un champ 'id' ou 'number' avec le vrai numéro
-        const realNumber = contact.number || contact.id?.split('@')[0];
-        if (realNumber && !realNumber.includes('lid')) {
-          const phone = realNumber.startsWith('+') ? realNumber : `+${realNumber.replace(/\D/g, '')}`;
-          this.lidCache.set(lid, phone);
-          console.log(`[LID Résolution] Via API Evolution: ${lid} → ${phone}`);
-          return phone;
+        // Ne JAMAIS utiliser contact.id s'il ne contient pas @s.whatsapp.net (sinon c'est un UUID/CUID de base)
+        const candidateNumber = contact.number || (contact.id?.includes('@s.whatsapp.net') ? contact.id.split('@')[0] : null);
+        if (candidateNumber) {
+          const digits = candidateNumber.replace(/\D/g, '');
+          if (this.isValidE164Digits(digits)) {
+            const phone = this.normalizePhone(candidateNumber);
+            this.lidCache.set(lid, phone);
+            console.log(`[LID Résolution] Via API Evolution findContacts: ${lid} → ${phone}`);
+            return phone;
+          }
         }
       }
     } catch (err: any) {
@@ -111,18 +127,23 @@ export class WhatsAppService {
         }
       );
 
-      if (res.data?.number && !res.data.number.includes('lid')) {
-        const phone = res.data.number.startsWith('+') ? res.data.number : `+${res.data.number.replace(/\D/g, '')}`;
-        this.lidCache.set(lid, phone);
-        console.log(`[LID Résolution] Via fetchProfile: ${lid} → ${phone}`);
-        return phone;
+      if (res.data?.number) {
+        const digits = res.data.number.replace(/\D/g, '');
+        if (this.isValidE164Digits(digits)) {
+          const phone = this.normalizePhone(res.data.number);
+          this.lidCache.set(lid, phone);
+          console.log(`[LID Résolution] Via fetchProfile: ${lid} → ${phone}`);
+          return phone;
+        }
       }
     } catch (err: any) {
       console.warn(`[LID Résolution] fetchProfile non disponible: ${err.message}`);
     }
 
-    // 5. Fallback: garder le LID tel quel
-    console.warn(`[LID Résolution] Impossible de résoudre ${lid}, utilisation du LID brut`);
+    // 5. Fallback CRUCIAL: GARDER LE JID LID TEL QUEL !
+    // Evolution API route parfaitement les messages directement vers l'identifiant LID.
+    console.log(`[LID Résolution] Numéro téléphonique non exposé, utilisation du JID LID natif : ${lid}`);
+    this.lidCache.set(lid, lid);
     return lid;
   }
 

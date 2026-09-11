@@ -133,6 +133,18 @@ async function bootstrap() {
     } catch (err: any) {
       console.warn('[Startup] Seed prompt ignoré (table peut ne pas exister encore):', err.message);
     }
+
+    // 9. Nettoyage des leads créés avec le numéro corrompu "+000..." issu de l'ancien bug LID
+    try {
+      const corrupted = await prisma.lead.deleteMany({
+        where: { phone: { startsWith: '+000' } },
+      });
+      if (corrupted.count > 0) {
+        console.log(`✓ [Startup] Nettoyage de ${corrupted.count} lead(s) avec numéro corrompu (+000...)`);
+      }
+    } catch {
+      // Ignorer si la table n'est pas encore prête
+    }
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
