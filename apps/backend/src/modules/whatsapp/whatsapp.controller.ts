@@ -27,15 +27,16 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
     // 2. Extraction du message en tâche de fond (ne bloque pas le webhook)
     setImmediate(async () => {
       try {
-        const eventType = body.event;
+        const rawEventType = body.event || '';
+        const normalizedEvent = rawEventType.toLowerCase().replace(/_/g, '.');
 
         // ═══════════════════════════════════════════════════════════════
         // LOG DIAGNOSTIC : afficher chaque événement reçu
         // ═══════════════════════════════════════════════════════════════
-        console.log(`[Webhook] Événement reçu: type="${eventType || 'N/A'}", clés: ${JSON.stringify(Object.keys(body))}`);
+        console.log(`[Webhook] Événement reçu: type="${rawEventType || 'N/A'}", clés: ${JSON.stringify(Object.keys(body))}`);
 
         // GESTION des événements CONNECTION_UPDATE
-        if (eventType === 'connection.update' || eventType === 'CONNECTION_UPDATE') {
+        if (normalizedEvent === 'connection.update') {
           console.log(`[Webhook] CONNECTION_UPDATE:`, JSON.stringify(body.data || body));
           await whatsAppService.handleConnectionUpdate(body.data || body);
           return;
@@ -49,8 +50,8 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           'call', 'status.instance', 'labels.edit', 'labels.association',
           'typebot.start', 'typebot.change', 'send.message',
         ];
-        if (eventType && ignoredEvents.includes(eventType)) {
-          console.log(`[Webhook] Événement "${eventType}" ignoré (non pertinent)`);
+        if (normalizedEvent && ignoredEvents.includes(normalizedEvent)) {
+          console.log(`[Webhook] Événement "${rawEventType}" ignoré (non pertinent)`);
           return;
         }
 
@@ -64,7 +65,11 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
 
         // Structure standard Evolution API v2 (messages.upsert)
         if (body.data) {
-          const data = body.data;
+          const data = Array.isArray(body.data) ? body.data[0] : body.data;
+          if (!data) {
+            console.log('[Webhook] body.data est vide');
+            return;
+          }
           const key = data.key || {};
           fromMe = Boolean(key.fromMe);
           whatsappMessageId = key.id;
@@ -89,7 +94,8 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
 
           pushName = data.pushName;
 
-          const msg = data.message || {};
+          const rawMsg = data.message || {};
+          const msg = rawMsg.ephemeralMessage?.message || rawMsg.viewOnceMessage?.message || rawMsg;
           text =
             msg.conversation ||
             msg.extendedTextMessage?.text ||

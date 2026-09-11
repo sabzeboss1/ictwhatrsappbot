@@ -536,6 +536,7 @@ export class WhatsAppService {
               'X-Webhook-Secret': env.EVOLUTION_WEBHOOK_SECRET,
             },
             byEvents: false,
+            webhookByEvents: false,
             base64: false,
             events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
           },
