@@ -86,6 +86,22 @@ async function bootstrap() {
     console.log(`\n🚀 Serveur ICT WhatsApp AI actif sur http://localhost:${env.PORT}`);
     console.log(`📡 Webhook WhatsApp : http://localhost:${env.PORT}/webhooks/whatsapp`);
     console.log(`🔌 Socket.IO prêt pour les mises à jour temps réel\n`);
+
+    // 7. Auto-configuration du webhook Evolution API au démarrage
+    // Délai de 5s pour laisser Evolution API démarrer complètement
+    setTimeout(async () => {
+      try {
+        console.log('[Startup] Configuration automatique du webhook Evolution API...');
+        const ok = await whatsAppService.ensureWebhookConfigured();
+        if (ok) {
+          console.log('✓ [Startup] Webhook Evolution API configuré avec succès (http://backend:3001/webhooks/whatsapp)');
+        } else {
+          console.warn('⚠ [Startup] Le webhook n\'a pas pu être configuré (Evolution API peut ne pas être prêt)');
+        }
+      } catch (e: any) {
+        console.warn('[Startup] Webhook auto-config ignoré:', e.message);
+      }
+    }, 5000);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

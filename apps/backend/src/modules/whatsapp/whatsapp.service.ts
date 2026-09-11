@@ -416,9 +416,52 @@ export class WhatsAppService {
   }
 
   /**
+   * Configure le webhook Evolution API pour pointer vers le backend Docker interne.
+   * TOUJOURS utiliser l'URL Docker interne, jamais l'URL externe.
+   * Appelé au démarrage du serveur ET lors de la connexion d'instance.
+   */
+  public async ensureWebhookConfigured(): Promise<boolean> {
+    // CRUCIAL: Toujours utiliser l'URL Docker interne pour le webhook.
+    // L'URL externe (ex: https://bot.bossseo.net) ne fonctionne PAS car
+    // Evolution API est dans le même réseau Docker et doit joindre le backend directement.
+    const targetWebhookUrl = `http://backend:3001/webhooks/whatsapp`;
+
+    try {
+      console.log(`[Evolution API] Configuration du webhook → ${targetWebhookUrl}`);
+      await axios.post(
+        `${env.EVOLUTION_API_URL}/webhook/set/${env.EVOLUTION_INSTANCE_NAME}`,
+        {
+          webhook: {
+            enabled: true,
+            url: targetWebhookUrl,
+            headers: {
+              'X-Webhook-Secret': env.EVOLUTION_WEBHOOK_SECRET,
+            },
+            byEvents: false,
+            base64: false,
+            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE'],
+          },
+        },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        }
+      );
+      console.log(`✓ [Evolution API] Webhook configuré avec succès → ${targetWebhookUrl}`);
+      return true;
+    } catch (e: any) {
+      console.warn('[Evolution API] Échec configuration webhook:', e?.response?.data || e.message);
+      return false;
+    }
+  }
+
+  /**
    * Connecte l'instance WhatsApp : crée l'instance si besoin, configure le webhook, et renvoie le QR Code
    */
-  public async connectInstance(webhookBaseUrl?: string): Promise<{
+  public async connectInstance(_webhookBaseUrl?: string): Promise<{
     success: boolean;
     state: string;
     qrcode?: string;
@@ -448,37 +491,8 @@ export class WhatsAppService {
       // Si l'instance existe déjà, ignorer l'erreur
     }
 
-    // 2. Configurer le Webhook automatiquement
-    const targetWebhookUrl = webhookBaseUrl
-      ? `${webhookBaseUrl.replace(/\/+$/, '')}/webhooks/whatsapp`
-      : `http://backend:3001/webhooks/whatsapp`;
-
-    try {
-      await axios.post(
-        `${env.EVOLUTION_API_URL}/webhook/set/${env.EVOLUTION_INSTANCE_NAME}`,
-        {
-          webhook: {
-            enabled: true,
-            url: targetWebhookUrl,
-            headers: {
-              'X-Webhook-Secret': env.EVOLUTION_WEBHOOK_SECRET,
-            },
-            byEvents: false,
-            base64: false,
-            events: ['MESSAGES_UPSERT'],
-          },
-        },
-        {
-          headers: {
-            apikey: env.EVOLUTION_API_KEY,
-            'Content-Type': 'application/json',
-          },
-          timeout: 5000,
-        }
-      );
-    } catch (e: any) {
-      console.warn('[Evolution API] Avertissement config webhook:', e.message);
-    }
+    // 2. Configurer le Webhook automatiquement (toujours Docker interne)
+    await this.ensureWebhookConfigured();
 
     // 3. Obtenir le QR Code pour l'utilisateur
     try {

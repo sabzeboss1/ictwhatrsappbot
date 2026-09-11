@@ -120,5 +120,34 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
       const result = await whatsAppService.disconnectInstance();
       return reply.send(result);
     });
+
+    // Forcer la reconfiguration du webhook (Docker interne)
+    protectedRoutes.post('/api/whatsapp/fix-webhook', async (request: FastifyRequest, reply: FastifyReply) => {
+      const ok = await whatsAppService.ensureWebhookConfigured();
+      return reply.send({
+        success: ok,
+        webhookUrl: 'http://backend:3001/webhooks/whatsapp',
+        message: ok
+          ? 'Webhook reconfiguré avec succès vers le backend Docker interne.'
+          : 'Échec de la reconfiguration du webhook. Vérifiez les logs.',
+      });
+    });
+
+    // Diagnostic du webhook actuel
+    protectedRoutes.get('/api/whatsapp/debug-webhook', async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const axios = (await import('axios')).default;
+        const res = await axios.get(
+          `${env.EVOLUTION_API_URL}/webhook/find/${env.EVOLUTION_INSTANCE_NAME}`,
+          {
+            headers: { apikey: env.EVOLUTION_API_KEY },
+            timeout: 5000,
+          }
+        );
+        return reply.send({ webhook: res.data });
+      } catch (err: any) {
+        return reply.send({ error: err?.response?.data || err.message });
+      }
+    });
   });
 }
