@@ -141,11 +141,7 @@ export class AgentService {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `${activePrompt.prompt}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
-          existingLeadData || {},
-          null,
-          2
-        )}\nTu dois impérativement renvoyer un objet JSON valide correspondant au schéma LeadQualificationOutputSchema.`,
+        content: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData),
       },
       ...history.map((h) => ({
         role: h.role,
@@ -168,7 +164,59 @@ export class AgentService {
     if (!content) throw new Error('Réponse OpenAI vide');
 
     const parsed = JSON.parse(content);
+    this.normalizeOutputKeys(parsed);
     return LeadQualificationOutputSchema.parse(parsed);
+  }
+
+  private buildSystemPromptWithSchema(basePrompt: string, existingLeadData?: any): string {
+    return `${basePrompt}
+
+Données actuelles connues sur ce prospect:
+${JSON.stringify(existingLeadData || {}, null, 2)}
+
+INSTRUCTION CRUCIALE DE FORMAT DE SORTIE :
+Tu dois impérativement renvoyer UNIQUEMENT un objet JSON valide (sans aucun texte d'introduction ni de conclusion).
+Le champ contenant le message WhatsApp destiné au client DOIT OBLIGATOIREMENT s'appeler "whatsapp_message".
+
+Structure JSON exacte requise :
+{
+  "whatsapp_message": "Texte exact du message WhatsApp à envoyer au client (chaleureux, courtois, 1 question max)",
+  "conversation_stage": "NEW_CONTACT",
+  "intent": "Decouverte",
+  "customer_type": "Particulier",
+  "need": null,
+  "participants_count": null,
+  "preferred_date": null,
+  "budget": null,
+  "recommended_offer": null,
+  "product_identified": false,
+  "purchase_intent": "information",
+  "availability_confirmed": false,
+  "product_standard": false,
+  "custom_request": false,
+  "is_b2b": false,
+  "is_vip": false,
+  "interaction_level": "dialogue_actif",
+  "objections": [],
+  "first_name": null,
+  "last_name": null,
+  "email": null
+}`;
+  }
+
+  private normalizeOutputKeys(parsed: any): void {
+    if (!parsed || typeof parsed !== 'object') return;
+    if (!parsed.whatsapp_message) {
+      parsed.whatsapp_message =
+        parsed.message ||
+        parsed.reply ||
+        parsed.text ||
+        parsed.response ||
+        parsed.whatsappMessage ||
+        parsed.output_message ||
+        parsed.content ||
+        'Bonjour ! Comment puis-je vous renseigner chez Inside Cameroon Tourism ?';
+    }
   }
 
   private async callAnthropic(
@@ -238,11 +286,7 @@ export class AgentService {
         response = await this.anthropicClient.messages.create({
           model: m,
           max_tokens: 1024,
-          system: `${activePrompt.prompt}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
-            existingLeadData || {},
-            null,
-            2
-          )}\nTu dois impérativement renvoyer UNIQUEMENT un objet JSON valide correspondant au schéma LeadQualificationOutputSchema.`,
+          system: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData),
           messages: rawMessages,
         });
         if (response && response.content?.[0]) {
@@ -272,6 +316,7 @@ export class AgentService {
     }
 
     const parsed = JSON.parse(jsonStr);
+    this.normalizeOutputKeys(parsed);
     return LeadQualificationOutputSchema.parse(parsed);
   }
 

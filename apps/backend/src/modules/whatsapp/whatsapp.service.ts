@@ -28,8 +28,16 @@ export class WhatsAppService {
       // Si pas en cache, on garde le JID brut pour routage (sera résolu async)
       return jid;
     }
-    const rawNumber = jid.split('@')[0].replace(/[^\d+]/g, '');
-    return rawNumber.startsWith('+') ? rawNumber : `+${rawNumber}`;
+    let digits = jid.split('@')[0].replace(/\D/g, '');
+    // Si format local français (10 chiffres commençant par 06 ou 07) -> +336...
+    if ((digits.startsWith('06') || digits.startsWith('07')) && digits.length === 10) {
+      digits = '33' + digits.substring(1);
+    }
+    // Si format local camerounais (9 chiffres commençant par 6) -> +2376...
+    if (digits.startsWith('6') && digits.length === 9) {
+      digits = '237' + digits;
+    }
+    return `+${digits}`;
   }
 
   /**
@@ -123,11 +131,29 @@ export class WhatsAppService {
    */
   public async sendWhatsAppMessage(phone: string, text: string): Promise<any> {
     // Si c'est un @lid, envoyer le JID complet. Sinon, envoyer le numéro nettoyé.
-    const target = phone.includes('@lid')
+    let target = phone.includes('@lid')
       ? phone
       : phone.includes('@s.whatsapp.net')
       ? phone.split('@')[0].replace(/[^\d]/g, '')
       : phone.replace(/[^\d]/g, '');
+
+    // Conversion automatique indicatif si nécessaire :
+    // Si format français local (10 chiffres commençant par 06 ou 07) -> 336... / 337...
+    if ((target.startsWith('06') || target.startsWith('07')) && target.length === 10) {
+      target = '33' + target.substring(1);
+    }
+    // Si format camerounais local (9 chiffres commençant par 6) -> 2376...
+    if (target.startsWith('6') && target.length === 9) {
+      target = '237' + target;
+    }
+
+    // Validation minimale : un numéro WhatsApp doit comporter au moins 8 chiffres (sauf si JID LID)
+    if (!target.includes('@lid') && target.length < 8) {
+      console.warn(
+        `⚠ [WhatsApp API] Numéro "${phone}" incomplet ou non valide (${target.length} chiffres). Envoi WhatsApp annulé (le message reste visible dans l'interface).`
+      );
+      return { simulated: true, message: `Numéro trop court (${target}), envoi WhatsApp annulé`, error: 'Invalid phone length' };
+    }
 
     const url = `${env.EVOLUTION_API_URL}/message/sendText/${env.EVOLUTION_INSTANCE_NAME}`;
 

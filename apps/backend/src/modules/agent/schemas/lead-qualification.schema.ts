@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const LeadQualificationOutputSchema = z.object({
-  whatsapp_message: z.string(),
+  whatsapp_message: z.string().min(1).catch('Bonjour ! Comment puis-je vous aider chez Inside Cameroon Tourism ?'),
   conversation_stage: z.enum([
     'NEW_CONTACT',
     'DISCOVERY',

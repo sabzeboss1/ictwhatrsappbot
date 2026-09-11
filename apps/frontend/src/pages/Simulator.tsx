@@ -166,6 +166,9 @@ export const Simulator: React.FC = () => {
                   placeholder="+237699001122"
                   className="w-full bg-slate-900 border border-slate-700/80 rounded-xl px-3 py-2 text-white font-mono focus:outline-none focus:border-emerald-500"
                 />
+                <span className="text-[10px] text-slate-400 block mt-1">
+                  💡 Entrez un <strong>vrai numéro</strong> avec indicatif (+237 ou +33...) pour recevoir la réponse en direct sur votre WhatsApp.
+                </span>
               </div>
 
               <div>
