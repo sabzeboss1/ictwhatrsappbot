@@ -6,11 +6,18 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
   // Webhook Evolution API
   fastify.post('/webhooks/whatsapp', async (request: FastifyRequest, reply: FastifyReply) => {
     const secret = request.headers['x-webhook-secret'];
+    const remoteIp = request.ip || '';
 
-    // Vérification de sécurité stricte
-    if (!secret || secret !== env.EVOLUTION_WEBHOOK_SECRET) {
+    // Vérification de sécurité : accepter si le header secret correspond OU si la requête vient du réseau Docker interne
+    const isDockerInternal = remoteIp.startsWith('172.') || remoteIp.startsWith('10.') || remoteIp === '127.0.0.1' || remoteIp === '::1';
+    const secretValid = secret && secret === env.EVOLUTION_WEBHOOK_SECRET;
+
+    if (!secretValid && !isDockerInternal) {
+      console.warn(`[Webhook] Requête rejetée de ${remoteIp} - secret invalide et hors réseau Docker`);
       return reply.status(401).send({ error: 'Secret de webhook invalide' });
     }
+
+    console.log(`[Webhook] Requête acceptée de ${remoteIp} (Docker: ${isDockerInternal}, Secret: ${!!secretValid})`);
 
     const body: any = request.body || {};
 

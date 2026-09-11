@@ -45,13 +45,17 @@ services:
       DATABASE_CONNECTION_URI: postgresql://ict_user:ict_password@postgres:5432/ict_whatsapp?schema=evolution
       DATABASE_ENABLED: "true"
       DATABASE_SAVE_DATA_INSTANCE: "true"
-      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
-      DATABASE_SAVE_MESSAGE_UPDATE: "false"
-      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
       DATABASE_SAVE_DATA_CHATS: "false"
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: redis://redis:6379/1
       CACHE_REDIS_PREFIX_KEY: evolution
+      # Webhook Global - livraison directe au backend Docker interne
+      WEBHOOK_GLOBAL_ENABLED: "true"
+      WEBHOOK_GLOBAL_URL: http://backend:3001/webhooks/whatsapp
+      WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS: "false"
     volumes:
       - evolution_instances:/evolution/instances
     depends_on:
