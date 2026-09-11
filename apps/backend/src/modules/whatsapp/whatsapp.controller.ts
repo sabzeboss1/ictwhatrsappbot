@@ -27,14 +27,30 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
     // 2. Extraction du message en tâche de fond (ne bloque pas le webhook)
     setImmediate(async () => {
       try {
-        // ═══════════════════════════════════════════════════════════════
-        // GESTION des événements CONNECTION_UPDATE
-        // Reconfigure automatiquement le webhook après un scan QR réussi
-        // ═══════════════════════════════════════════════════════════════
         const eventType = body.event;
+
+        // ═══════════════════════════════════════════════════════════════
+        // LOG DIAGNOSTIC : afficher chaque événement reçu
+        // ═══════════════════════════════════════════════════════════════
+        console.log(`[Webhook] Événement reçu: type="${eventType || 'N/A'}", clés: ${JSON.stringify(Object.keys(body))}`);
+
+        // GESTION des événements CONNECTION_UPDATE
         if (eventType === 'connection.update' || eventType === 'CONNECTION_UPDATE') {
-          console.log(`[Webhook] Événement CONNECTION_UPDATE reçu:`, JSON.stringify(body.data || body));
+          console.log(`[Webhook] CONNECTION_UPDATE:`, JSON.stringify(body.data || body));
           await whatsAppService.handleConnectionUpdate(body.data || body);
+          return;
+        }
+
+        // Ignorer les événements qui ne sont pas des messages entrants
+        const ignoredEvents = [
+          'qrcode.updated', 'messages.update', 'messages.delete',
+          'presence.update', 'chats.update', 'chats.upsert', 'chats.delete',
+          'contacts.update', 'contacts.upsert', 'groups.update', 'groups.upsert',
+          'call', 'status.instance', 'labels.edit', 'labels.association',
+          'typebot.start', 'typebot.change', 'send.message',
+        ];
+        if (eventType && ignoredEvents.includes(eventType)) {
+          console.log(`[Webhook] Événement "${eventType}" ignoré (non pertinent)`);
           return;
         }
 
@@ -54,22 +70,19 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           whatsappMessageId = key.id;
           rawPhone = key.remoteJid || '';
 
-          // ═══════════════════════════════════════════════════════════
+          // LOG : données clés extraites
+          console.log(`[Webhook] Extraction: remoteJid="${rawPhone}", fromMe=${fromMe}, msgId="${whatsappMessageId}", pushName="${data.pushName || 'N/A'}"`);
+
           // RÉSOLUTION LID améliorée
-          // Les Linked IDs (@lid) sont courants avec WhatsApp Business.
-          // On tente de résoudre vers le vrai numéro via plusieurs stratégies.
-          // ═══════════════════════════════════════════════════════════
           if (rawPhone.includes('@lid')) {
             console.log(`[Webhook] LID détecté: ${rawPhone}`);
-            // Tenter d'abord avec les hints du webhook
             const participantHint = key.participant || data.participant || data.sender;
             if (participantHint && participantHint.includes('@s.whatsapp.net')) {
               rawPhone = participantHint;
               console.log(`[Webhook] LID résolu via participant hint: ${rawPhone}`);
             } else {
-              // Résolution async via cache + API Evolution
               const resolvedPhone = await whatsAppService.resolveLidToPhone(rawPhone, participantHint);
-              rawPhone = resolvedPhone.includes('@') ? resolvedPhone : resolvedPhone;
+              rawPhone = resolvedPhone;
               console.log(`[Webhook] LID résolu: ${rawPhone}`);
             }
           }
@@ -81,7 +94,15 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
             msg.conversation ||
             msg.extendedTextMessage?.text ||
             msg.imageMessage?.caption ||
+            msg.videoMessage?.caption ||
+            msg.documentMessage?.caption ||
+            msg.buttonsResponseMessage?.selectedDisplayText ||
+            msg.listResponseMessage?.title ||
+            msg.templateButtonReplyMessage?.selectedDisplayText ||
             '';
+
+          // LOG : contenu du message extrait
+          console.log(`[Webhook] Message extrait: text="${text ? text.substring(0, 80) : '(vide)'}", messageKeys=${JSON.stringify(Object.keys(msg))}`);
 
           // Détection Facebook Ads / Instagram Ads (Click-to-WhatsApp)
           const contextInfo = msg.extendedTextMessage?.contextInfo || msg.contextInfo;
@@ -107,16 +128,24 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           pushName = body.pushName || 'Prospect Test';
           source = body.source || 'facebook_ads';
           campaign = body.campaign || 'Campagne Facebook Ads Test';
+        } else {
+          // LOG : structure inattendue
+          console.log(`[Webhook] Structure non reconnue, body.data=${!!body.data}, body.phone=${!!body.phone}. Corps complet:`, JSON.stringify(body).substring(0, 500));
+          return;
         }
 
-        // Ignorer les messages que nous avons nous-mêmes envoyés depuis le WhatsApp émetteur
+        // Ignorer les messages que nous avons nous-mêmes envoyés
         if (fromMe) {
+          console.log(`[Webhook] Message fromMe=true ignoré (message sortant)`);
           return;
         }
 
         if (!rawPhone || !text) {
+          console.log(`[Webhook] Message ignoré: rawPhone="${rawPhone || '(vide)'}", text="${text ? text.substring(0, 50) : '(vide)'}"`);
           return;
         }
+
+        console.log(`[Webhook] ✓ Traitement du message de ${rawPhone}: "${text.substring(0, 80)}"`);
 
         await whatsAppService.handleInboundMessage({
           rawPhone,
