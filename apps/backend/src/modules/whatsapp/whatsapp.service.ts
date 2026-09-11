@@ -8,16 +8,114 @@ import { emitLeadAlert, emitLeadUpdated, emitNewMessage } from '../../plugins/so
 
 export class WhatsAppService {
   /**
+   * Cache LID → Phone pour éviter des appels API répétés.
+   * Les Linked IDs (format @lid) sont une particularité de WhatsApp Business / Baileys
+   * où le numéro réel n'est pas directement dans le JID.
+   */
+  private lidCache = new Map<string, string>();
+
+  /**
    * Nettoie et normalise le numéro de téléphone WhatsApp
    * ex: 237699112233@s.whatsapp.net -> +237699112233
    */
   public normalizePhone(jid: string): string {
     if (jid.includes('@lid')) {
-      // Si c'est un Linked ID, conserver l'identifiant pour garantir le routage
+      // Vérifier le cache LID
+      const cached = this.lidCache.get(jid);
+      if (cached) {
+        return cached;
+      }
+      // Si pas en cache, on garde le JID brut pour routage (sera résolu async)
       return jid;
     }
     const rawNumber = jid.split('@')[0].replace(/[^\d+]/g, '');
     return rawNumber.startsWith('+') ? rawNumber : `+${rawNumber}`;
+  }
+
+  /**
+   * Résout un LID (Linked ID) vers un vrai numéro de téléphone via l'API Evolution.
+   * Utilise un cache en mémoire pour éviter les appels répétés.
+   * 
+   * Stratégie de résolution :
+   * 1. Cache mémoire
+   * 2. Champs participant/sender du webhook (si fournis)
+   * 3. API Evolution fetchContacts
+   * 4. Fallback: garder le LID tel quel
+   */
+  public async resolveLidToPhone(lid: string, participantHint?: string): Promise<string> {
+    // 1. Cache
+    const cached = this.lidCache.get(lid);
+    if (cached) {
+      console.log(`[LID Cache] Résolu depuis le cache: ${lid} → ${cached}`);
+      return cached;
+    }
+
+    // 2. Indice du webhook (participant ou sender avec @s.whatsapp.net)
+    if (participantHint && participantHint.includes('@s.whatsapp.net')) {
+      const phone = this.normalizePhone(participantHint);
+      this.lidCache.set(lid, phone);
+      console.log(`[LID Résolution] Via participant hint: ${lid} → ${phone}`);
+      return phone;
+    }
+
+    // 3. Tenter via l'API Evolution
+    try {
+      const lidNumber = lid.split('@')[0];
+      const res = await axios.post(
+        `${env.EVOLUTION_API_URL}/chat/findContacts/${env.EVOLUTION_INSTANCE_NAME}`,
+        { where: { id: lid } },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        }
+      );
+
+      const contacts = res.data;
+      if (Array.isArray(contacts) && contacts.length > 0) {
+        const contact = contacts[0];
+        // Le contact peut avoir un champ 'id' ou 'number' avec le vrai numéro
+        const realNumber = contact.number || contact.id?.split('@')[0];
+        if (realNumber && !realNumber.includes('lid')) {
+          const phone = realNumber.startsWith('+') ? realNumber : `+${realNumber.replace(/\D/g, '')}`;
+          this.lidCache.set(lid, phone);
+          console.log(`[LID Résolution] Via API Evolution: ${lid} → ${phone}`);
+          return phone;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[LID Résolution] API Evolution findContacts non disponible: ${err.message}`);
+    }
+
+    // 4. Tenter via l'endpoint fetchProfile du contact
+    try {
+      const res = await axios.post(
+        `${env.EVOLUTION_API_URL}/chat/fetchProfile/${env.EVOLUTION_INSTANCE_NAME}`,
+        { number: lid },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 5000,
+        }
+      );
+
+      if (res.data?.number && !res.data.number.includes('lid')) {
+        const phone = res.data.number.startsWith('+') ? res.data.number : `+${res.data.number.replace(/\D/g, '')}`;
+        this.lidCache.set(lid, phone);
+        console.log(`[LID Résolution] Via fetchProfile: ${lid} → ${phone}`);
+        return phone;
+      }
+    } catch (err: any) {
+      console.warn(`[LID Résolution] fetchProfile non disponible: ${err.message}`);
+    }
+
+    // 5. Fallback: garder le LID tel quel
+    console.warn(`[LID Résolution] Impossible de résoudre ${lid}, utilisation du LID brut`);
+    return lid;
   }
 
   /**
@@ -459,6 +557,36 @@ export class WhatsAppService {
   }
 
   /**
+   * Gère les événements CONNECTION_UPDATE reçus par le webhook.
+   * Reconfigure automatiquement le webhook après une reconnexion réussie.
+   */
+  public async handleConnectionUpdate(data: any): Promise<void> {
+    const state = data?.state || data?.instance?.state;
+    const statusReason = data?.statusReason;
+
+    console.log(`[Connection Update] État: ${state}, Raison: ${statusReason || 'N/A'}`);
+
+    if (state === 'open') {
+      console.log('[Connection Update] WhatsApp connecté ! Reconfiguration du webhook...');
+      // Petit délai pour laisser l'instance se stabiliser
+      setTimeout(async () => {
+        try {
+          const ok = await this.ensureWebhookConfigured();
+          if (ok) {
+            console.log('✓ [Connection Update] Webhook reconfiguré avec succès après reconnexion');
+          } else {
+            console.warn('⚠ [Connection Update] Échec reconfiguration webhook post-connexion');
+          }
+        } catch (e: any) {
+          console.error('[Connection Update] Erreur reconfiguration webhook:', e.message);
+        }
+      }, 2000);
+    } else if (state === 'close') {
+      console.log('[Connection Update] WhatsApp déconnecté.');
+    }
+  }
+
+  /**
    * Connecte l'instance WhatsApp : crée l'instance si besoin, configure le webhook, et renvoie le QR Code
    */
   public async connectInstance(_webhookBaseUrl?: string): Promise<{
@@ -542,4 +670,3 @@ export class WhatsAppService {
 }
 
 export const whatsAppService = new WhatsAppService();
-

@@ -6,10 +6,19 @@ import {
   LeadQualificationOutput,
   LeadQualificationOutputSchema,
 } from './schemas/lead-qualification.schema.js';
+import { prisma } from '../../plugins/prisma.js';
 
 export class AgentService {
   private openaiClient: OpenAI | null = null;
   private anthropicClient: Anthropic | null = null;
+
+  /**
+   * Cache du prompt actif pour éviter de requêter la DB à chaque message.
+   * Invalidé manuellement via invalidatePromptCache() ou automatiquement toutes les 60s.
+   */
+  private cachedPrompt: { prompt: string; version: string; name: string } | null = null;
+  private promptCacheTimestamp: number = 0;
+  private static PROMPT_CACHE_TTL_MS = 60_000; // 60 secondes
 
   constructor() {
     if (env.OPENAI_API_KEY) {
@@ -20,10 +29,70 @@ export class AgentService {
     }
   }
 
+  /**
+   * Invalide le cache du prompt actif.
+   * Appelé après chaque modification de template depuis l'admin.
+   */
+  public invalidatePromptCache(): void {
+    this.cachedPrompt = null;
+    this.promptCacheTimestamp = 0;
+    console.log('[AgentService] Cache prompt invalidé');
+  }
+
+  /**
+   * Charge le prompt système actif depuis la base de données.
+   * Utilise un cache avec TTL de 60s et invalidation manuelle.
+   * Fallback: prompt hardcodé dans lead-qualification.ts
+   */
+  public async getActivePrompt(): Promise<{ prompt: string; version: string; name: string }> {
+    // Vérifier le cache
+    const now = Date.now();
+    if (this.cachedPrompt && (now - this.promptCacheTimestamp) < AgentService.PROMPT_CACHE_TTL_MS) {
+      return this.cachedPrompt;
+    }
+
+    try {
+      const activeTemplate = await prisma.promptTemplate.findFirst({
+        where: { isActive: true },
+      });
+
+      if (activeTemplate) {
+        this.cachedPrompt = {
+          prompt: activeTemplate.prompt,
+          version: activeTemplate.version,
+          name: activeTemplate.name,
+        };
+        this.promptCacheTimestamp = now;
+        return this.cachedPrompt;
+      }
+    } catch (err: any) {
+      console.warn('[AgentService] Erreur chargement prompt depuis DB, utilisation du fallback:', err.message);
+    }
+
+    // Fallback: prompt hardcodé
+    const fallback = {
+      prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
+      version: PROMPT_VERSION,
+      name: 'Prompt par défaut (hardcodé)',
+    };
+    this.cachedPrompt = fallback;
+    this.promptCacheTimestamp = now;
+    return fallback;
+  }
+
   public getPromptVersion() {
+    // Version synchrone pour la compatibilité existante, retourne le cache ou le hardcodé
+    if (this.cachedPrompt) {
+      return {
+        version: this.cachedPrompt.version,
+        prompt: this.cachedPrompt.prompt,
+        name: this.cachedPrompt.name,
+      };
+    }
     return {
       version: PROMPT_VERSION,
       prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
+      name: 'Prompt par défaut (hardcodé)',
     };
   }
 
@@ -66,10 +135,13 @@ export class AgentService {
   ): Promise<LeadQualificationOutput> {
     if (!this.openaiClient) throw new Error('OpenAI non configuré');
 
+    // Charger le prompt actif depuis la DB (avec cache)
+    const activePrompt = await this.getActivePrompt();
+
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
+        content: `${activePrompt.prompt}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
           existingLeadData || {},
           null,
           2
@@ -105,6 +177,9 @@ export class AgentService {
     existingLeadData?: any
   ): Promise<LeadQualificationOutput> {
     if (!this.anthropicClient) throw new Error('Anthropic non configuré');
+
+    // Charger le prompt actif depuis la DB (avec cache)
+    const activePrompt = await this.getActivePrompt();
 
     // Nettoyer et alterner strictement les rôles pour l'API Anthropic
     const rawMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -163,7 +238,7 @@ export class AgentService {
         response = await this.anthropicClient.messages.create({
           model: m,
           max_tokens: 1024,
-          system: `${SYSTEM_PROMPT_LEAD_QUALIFICATION}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
+          system: `${activePrompt.prompt}\n\nDonnées actuelles connues sur ce prospect:\n${JSON.stringify(
             existingLeadData || {},
             null,
             2

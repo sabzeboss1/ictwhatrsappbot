@@ -8,6 +8,7 @@ import { initSocketIO } from './plugins/socketio.js';
 import { registerProcessors } from './queues/message.queue.js';
 import { whatsAppService } from './modules/whatsapp/whatsapp.service.js';
 import { hubspotService } from './modules/hubspot/hubspot.service.js';
+import { SYSTEM_PROMPT_LEAD_QUALIFICATION, PROMPT_VERSION } from './modules/agent/prompts/lead-qualification.js';
 
 // Importation des routes
 import { authRoutes } from './modules/auth/auth.controller.js';
@@ -16,6 +17,7 @@ import { leadsRoutes } from './modules/leads/leads.controller.js';
 import { conversationsRoutes } from './modules/conversations/conversations.controller.js';
 import { statsRoutes } from './modules/stats/stats.controller.js';
 import { settingsRoutes } from './modules/settings/settings.controller.js';
+import { promptsRoutes } from './modules/settings/prompts.controller.js';
 
 const fastify = Fastify({
   logger: {
@@ -70,13 +72,14 @@ async function bootstrap() {
     await fastify.register(conversationsRoutes);
     await fastify.register(statsRoutes);
     await fastify.register(settingsRoutes);
+    await fastify.register(promptsRoutes);
 
     // Route racine de diagnostic rapide
     fastify.get('/', async () => {
       return {
         service: 'ICT WhatsApp AI Backend',
         status: 'online',
-        version: '2.0.0',
+        version: '2.1.0',
         timestamp: new Date().toISOString(),
       };
     });
@@ -102,6 +105,34 @@ async function bootstrap() {
         console.warn('[Startup] Webhook auto-config ignoré:', e.message);
       }
     }, 5000);
+
+    // 8. Seed du prompt par défaut en base s'il n'existe pas encore
+    try {
+      const existingDefault = await prisma.promptTemplate.findFirst({
+        where: { isDefault: true },
+      });
+
+      if (!existingDefault) {
+        console.log('[Startup] Création du prompt par défaut en base de données...');
+        await prisma.promptTemplate.create({
+          data: {
+            name: 'ICT Tourisme — Prompt Principal',
+            slug: 'ict-tourisme-principal',
+            description: 'Prompt système original d\'ICT pour la qualification commerciale WhatsApp. Agent IA de vente touristique.',
+            prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
+            isActive: true,
+            isDefault: true,
+            campaign: null,
+            version: PROMPT_VERSION,
+          },
+        });
+        console.log('✓ [Startup] Prompt par défaut créé et activé');
+      } else {
+        console.log(`✓ [Startup] Prompt par défaut existant: "${existingDefault.name}" (v${existingDefault.version})`);
+      }
+    } catch (err: any) {
+      console.warn('[Startup] Seed prompt ignoré (table peut ne pas exister encore):', err.message);
+    }
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

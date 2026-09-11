@@ -27,6 +27,17 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
     // 2. Extraction du message en tâche de fond (ne bloque pas le webhook)
     setImmediate(async () => {
       try {
+        // ═══════════════════════════════════════════════════════════════
+        // GESTION des événements CONNECTION_UPDATE
+        // Reconfigure automatiquement le webhook après un scan QR réussi
+        // ═══════════════════════════════════════════════════════════════
+        const eventType = body.event;
+        if (eventType === 'connection.update' || eventType === 'CONNECTION_UPDATE') {
+          console.log(`[Webhook] Événement CONNECTION_UPDATE reçu:`, JSON.stringify(body.data || body));
+          await whatsAppService.handleConnectionUpdate(body.data || body);
+          return;
+        }
+
         let rawPhone = '';
         let text = '';
         let whatsappMessageId: string | undefined = undefined;
@@ -42,12 +53,27 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           fromMe = Boolean(key.fromMe);
           whatsappMessageId = key.id;
           rawPhone = key.remoteJid || '';
+
+          // ═══════════════════════════════════════════════════════════
+          // RÉSOLUTION LID améliorée
+          // Les Linked IDs (@lid) sont courants avec WhatsApp Business.
+          // On tente de résoudre vers le vrai numéro via plusieurs stratégies.
+          // ═══════════════════════════════════════════════════════════
           if (rawPhone.includes('@lid')) {
-            const realJid = key.participant || data.participant || data.sender;
-            if (realJid && realJid.includes('@s.whatsapp.net')) {
-              rawPhone = realJid;
+            console.log(`[Webhook] LID détecté: ${rawPhone}`);
+            // Tenter d'abord avec les hints du webhook
+            const participantHint = key.participant || data.participant || data.sender;
+            if (participantHint && participantHint.includes('@s.whatsapp.net')) {
+              rawPhone = participantHint;
+              console.log(`[Webhook] LID résolu via participant hint: ${rawPhone}`);
+            } else {
+              // Résolution async via cache + API Evolution
+              const resolvedPhone = await whatsAppService.resolveLidToPhone(rawPhone, participantHint);
+              rawPhone = resolvedPhone.includes('@') ? resolvedPhone : resolvedPhone;
+              console.log(`[Webhook] LID résolu: ${rawPhone}`);
             }
           }
+
           pushName = data.pushName;
 
           const msg = data.message || {};

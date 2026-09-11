@@ -79,3 +79,17 @@ model AuditLog {
   metadata  Json?
   createdAt DateTime @default(now())
 }
+
+model PromptTemplate {
+  id          String   @id @default(cuid())
+  name        String                          // Ex: "ICT Tourisme", "Campagne Facebook Kribi"
+  slug        String   @unique                // identifiant unique machine
+  description String?                         // Description courte
+  prompt      String                          // Le contenu du system prompt
+  isActive    Boolean  @default(false)        // Un seul template actif à la fois
+  isDefault   Boolean  @default(false)        // Template par défaut (non supprimable)
+  campaign    String?                         // Nom de campagne associée (optionnel)
+  version     String   @default("1.0.0")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
