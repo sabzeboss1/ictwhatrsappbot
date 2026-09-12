@@ -27,6 +27,7 @@ import {
   Sparkles,
   CopyPlus,
   Wrench,
+  ExternalLink,
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -104,6 +105,15 @@ export const Settings: React.FC = () => {
     queryFn: async () => {
       const res = await api.get('/api/prompts');
       return res.data as PromptTemplate[];
+    },
+  });
+
+  // Liste des catalogues PDF disponibles
+  const { data: catalogues, isLoading: loadingCatalogues } = useQuery({
+    queryKey: ['catalogues'],
+    queryFn: async () => {
+      const res = await api.get('/api/catalogues');
+      return res.data;
     },
   });
 
@@ -810,6 +820,94 @@ export const Settings: React.FC = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION : Catalogues & Brochures PDF                   */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <div className="glass-panel p-5 sm:p-6 rounded-2xl border border-slate-800 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <span>Catalogues & Brochures PDF (Envoi WhatsApp)</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  {catalogues?.length || 0} Disponibles
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400">
+                Documents officiels envoyés automatiquement par l'IA lors des échanges ou manuellement par vos conseillers.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {loadingCatalogues ? (
+            <div className="col-span-2 text-center text-xs text-slate-500 py-6">
+              Chargement des catalogues...
+            </div>
+          ) : (
+            catalogues?.map((cat: any) => (
+              <div
+                key={cat.id}
+                className="p-4 rounded-xl bg-slate-900/70 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between space-y-3"
+              >
+                <div className="space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md ${
+                          cat.category === 'general'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-teal-500/20 text-teal-300 border border-teal-500/30'
+                        }`}
+                      >
+                        {cat.category === 'general' ? 'Catalogue Principal' : `Brochure ${cat.category}`}
+                      </span>
+                      {cat.fileSize && (
+                        <span className="text-[10px] text-slate-500">
+                          {Math.round(cat.fileSize / 1024)} Ko
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <h3 className="text-xs sm:text-sm font-bold text-white line-clamp-1">{cat.title}</h3>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">{cat.description}</p>
+                </div>
+
+                <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-3 text-xs">
+                  <span className="text-[10px] font-mono text-slate-400 truncate max-w-[200px]" title={cat.fileName}>
+                    {cat.fileName}
+                  </span>
+                  <a
+                    href={cat.publicUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-medium text-xs flex items-center gap-1.5 transition-colors border border-slate-700 shrink-0"
+                  >
+                    <span>Consulter</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
+                  </a>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="p-3.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20 text-xs text-slate-300 flex items-start gap-2.5">
+          <Sparkles className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-semibold text-emerald-300">Fonctionnement intelligent de l'Agent IA :</p>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Dès qu'un prospect demande un catalogue/brochure ou accepte la proposition du bot, l'IA envoie d'abord un message texte d'introduction puis expédie automatiquement le fichier PDF via WhatsApp (message type <code className="text-slate-200">document</code>). Vos conseillers peuvent également cliquer sur <strong>"Envoyer Catalogue PDF"</strong> dans la conversation.
+            </p>
           </div>
         </div>
       </div>

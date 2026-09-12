@@ -13,6 +13,7 @@ const envSchema = z.object({
   // IA
   AI_PROVIDER: z.enum(['openai', 'anthropic']).default('openai'),
   OPENAI_API_KEY: z.string().optional().default(''),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
   ANTHROPIC_API_KEY: z.string().optional().default(''),
   ANTHROPIC_MODEL: z.string().default('claude-3-5-haiku-20241022'),
 

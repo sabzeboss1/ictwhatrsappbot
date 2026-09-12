@@ -5,6 +5,7 @@ import { agentService } from '../agent/agent.service.js';
 import { computeScore } from '../scoring/scoring.service.js';
 import { enqueueHubspotSync } from '../../queues/message.queue.js';
 import { emitLeadAlert, emitLeadUpdated, emitNewMessage } from '../../plugins/socketio.js';
+import { catalogService } from '../catalog/catalog.service.js';
 
 export class WhatsAppService {
   /**
@@ -432,6 +433,24 @@ export class WhatsAppService {
     emitNewMessage(outboundMessage, updatedLead);
     emitLeadUpdated(updatedLead);
 
+    // Envoi automatique du catalogue ou de la brochure PDF si demandé ou accepté par le prospect
+    if (aiOutput.send_catalog) {
+      console.log(
+        `[WhatsAppService] 📄 Déclenchement envoi automatique catalogue/brochure PDF (${aiOutput.catalog_type || 'general'}) vers ${phone}`
+      );
+      setTimeout(async () => {
+        try {
+          await this.sendWhatsAppDocument({
+            phone,
+            catalogIdOrCategory: aiOutput.catalog_type,
+            leadId: updatedLead.id,
+          });
+        } catch (err: any) {
+          console.error('[WhatsAppService] Erreur envoi automatique document PDF:', err.message);
+        }
+      }, 1200);
+    }
+
     // Alerte si opportunité chaude, B2B ou VIP
     if (scoreResult.leadStatus === 'Opportunite chaude' || aiOutput.is_b2b || aiOutput.is_vip) {
       emitLeadAlert({
@@ -495,6 +514,129 @@ export class WhatsAppService {
     emitLeadUpdated(updatedLead);
 
     return { message, lead: updatedLead };
+  }
+
+  /**
+   * Envoie un catalogue ou brochure PDF via WhatsApp (Evolution API)
+   * et l'enregistre en base de données avec messageType = "document".
+   */
+  public async sendWhatsAppDocument(params: {
+    phone: string;
+    catalogIdOrCategory?: string | null;
+    customCaption?: string;
+    leadId: string;
+    sentByAgentId?: string | null;
+  }): Promise<{ result: any; message: any }> {
+    const { phone, catalogIdOrCategory, customCaption, leadId, sentByAgentId } = params;
+
+    const { base64DataUri, item } = catalogService.getCatalogBase64(catalogIdOrCategory);
+    const caption = customCaption || item.caption;
+
+    // Normalisation de la cible téléphonique
+    let target = phone.includes('@lid')
+      ? phone
+      : phone.includes('@s.whatsapp.net')
+      ? phone.split('@')[0].replace(/[^\d]/g, '')
+      : phone.replace(/[^\d]/g, '');
+
+    if ((target.startsWith('06') || target.startsWith('07')) && target.length === 10) {
+      target = '33' + target.substring(1);
+    }
+    if (target.startsWith('6') && target.length === 9) {
+      target = '237' + target;
+    }
+
+    const url = `${env.EVOLUTION_API_URL}/message/sendMedia/${env.EVOLUTION_INSTANCE_NAME}`;
+
+    let result: any = null;
+    try {
+      console.log(`[WhatsApp API] Envoi document PDF "${item.fileName}" à ${target}...`);
+      const response = await axios.post(
+        url,
+        {
+          number: target,
+          mediatype: 'document',
+          mimetype: 'application/pdf',
+          caption: caption,
+          fileName: item.fileName,
+          media: base64DataUri,
+        },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 15000,
+        }
+      );
+      console.log(`✓ [WhatsApp API] Document PDF délivré à ${target}`);
+      result = response.data;
+    } catch (err: any) {
+      console.warn(
+        `✗ [WhatsApp API] Échec envoi document à ${phone} (simulation locale active):`,
+        err.response?.data || err.message
+      );
+      result = { simulated: true, fileName: item.fileName, message: 'Document enregistré localement' };
+    }
+
+    // Enregistrement en base de données comme message de type 'document'
+    const docMessage = await prisma.message.create({
+      data: {
+        leadId,
+        direction: 'outbound',
+        content: `📄 *${item.title}*\nFichier : ${item.fileName}\n\n${caption}`,
+        messageType: 'document',
+        sentByAgentId: sentByAgentId || null,
+      },
+    });
+
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (lead) {
+      emitNewMessage(docMessage, lead);
+    }
+
+    return { result, message: docMessage };
+  }
+
+  /**
+   * Envoi manuel d'un catalogue PDF par un agent humain depuis le dashboard
+   */
+  public async sendManualCatalog(
+    leadId: string,
+    catalogId?: string,
+    customCaption?: string,
+    agentUserId?: string
+  ) {
+    const lead = await prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) throw new Error('Lead introuvable');
+
+    const updatedLead = await prisma.lead.update({
+      where: { id: leadId },
+      data: {
+        aiDisabled: true,
+        assignedAgentId: agentUserId,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: agentUserId,
+        action: 'catalog.sent_manually',
+        entityId: leadId,
+        metadata: JSON.stringify({ catalogId: catalogId || 'ict-general-2026' }),
+      },
+    });
+
+    const docResult = await this.sendWhatsAppDocument({
+      phone: lead.phone,
+      catalogIdOrCategory: catalogId,
+      customCaption,
+      leadId: lead.id,
+      sentByAgentId: agentUserId,
+    });
+
+    emitLeadUpdated(updatedLead);
+    return { ...docResult, lead: updatedLead };
   }
 
   /**

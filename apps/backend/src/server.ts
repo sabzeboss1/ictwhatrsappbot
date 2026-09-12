@@ -18,6 +18,8 @@ import { conversationsRoutes } from './modules/conversations/conversations.contr
 import { statsRoutes } from './modules/stats/stats.controller.js';
 import { settingsRoutes } from './modules/settings/settings.controller.js';
 import { promptsRoutes } from './modules/settings/prompts.controller.js';
+import { catalogRoutes } from './modules/catalog/catalog.controller.js';
+import { catalogService } from './modules/catalog/catalog.service.js';
 
 const fastify = Fastify({
   logger: {
@@ -73,6 +75,10 @@ async function bootstrap() {
     await fastify.register(statsRoutes);
     await fastify.register(settingsRoutes);
     await fastify.register(promptsRoutes);
+    await fastify.register(catalogRoutes);
+
+    // Initialisation des catalogues et brochures PDF
+    catalogService.ensureDefaultCatalogsExist();
 
     // Route racine de diagnostic rapide
     fastify.get('/', async () => {

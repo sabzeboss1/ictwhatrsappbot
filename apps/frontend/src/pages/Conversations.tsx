@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   Info,
   X,
+  FileText,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
@@ -33,6 +34,7 @@ export const Conversations: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
+  const [sendingCatalog, setSendingCatalog] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -113,6 +115,21 @@ export const Conversations: React.FC = () => {
       console.error("Erreur lors de l'envoi manuel:", err);
     } finally {
       setSending(false);
+    }
+  };
+
+  // Envoi manuel du catalogue PDF officiel
+  const handleSendCatalog = async () => {
+    if (!selectedLeadId || sendingCatalog) return;
+    setSendingCatalog(true);
+    try {
+      await api.post(`/api/leads/${selectedLeadId}/send-catalog`);
+      queryClient.invalidateQueries({ queryKey: ['lead', selectedLeadId] });
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    } catch (err) {
+      console.error("Erreur lors de l'envoi du catalogue:", err);
+    } finally {
+      setSendingCatalog(false);
     }
   };
 
@@ -347,6 +364,16 @@ export const Conversations: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={handleSendCatalog}
+                  disabled={sendingCatalog}
+                  className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all border bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50"
+                  title="Envoyer immédiatement le Catalogue PDF à ce prospect"
+                >
+                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">{sendingCatalog ? 'Envoi...' : 'Envoyer Catalogue PDF'}</span>
+                </button>
+
+                <button
                   onClick={() => setShowDetailPanel(!showDetailPanel)}
                   className={`p-2 rounded-xl text-xs font-semibold border transition-all ${
                     showDetailPanel ? 'bg-slate-800 text-emerald-400 border-slate-700' : 'text-slate-400 border-transparent hover:bg-slate-800'
@@ -367,6 +394,11 @@ export const Conversations: React.FC = () => {
               ) : (
                 currentLead.messages?.map((m: any) => {
                   const isInbound = m.direction === 'inbound';
+                  const isDocument = m.messageType === 'document';
+                  const fileMatch = m.content.match(/Fichier\s*:\s*([^\n\r]+)/i);
+                  const fileName = fileMatch ? fileMatch[1].trim() : 'Catalogue_ICT_Tourisme_2026.pdf';
+                  const downloadUrl = `/api/catalogues/download/${fileName}`;
+
                   return (
                     <div
                       key={m.id}
@@ -379,7 +411,36 @@ export const Conversations: React.FC = () => {
                             : 'bg-[#005c4b] text-white rounded-tr-none border border-emerald-600/30'
                         }`}
                       >
-                        <p className="text-xs leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                        {isDocument ? (
+                          <div className="space-y-2.5">
+                            <div className="flex items-center gap-3 p-2.5 rounded-xl bg-black/25 border border-white/10 hover:bg-black/35 transition-all">
+                              <div className="w-10 h-10 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0 shadow-inner">
+                                <FileText className="w-5 h-5" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-bold text-white truncate" title={fileName}>
+                                  {fileName}
+                                </div>
+                                <div className="text-[10px] text-emerald-300/80 font-medium">Document PDF • ICT Tourisme</div>
+                              </div>
+                              <a
+                                href={downloadUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[11px] flex items-center gap-1 transition-all shadow shrink-0"
+                                title="Ouvrir / Télécharger le document PDF"
+                              >
+                                <span>Consulter</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            </div>
+                            <p className="text-xs leading-relaxed whitespace-pre-wrap text-emerald-50/95">
+                              {m.content.replace(/^📄[^\n]*\nFichier\s*:[^\n]*\n+/i, '') || m.content}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs leading-relaxed whitespace-pre-wrap">{m.content}</p>
+                        )}
                         <div className="flex items-center justify-between gap-3 mt-1.5 pt-1 border-t border-white/10">
                           <span className="text-[9px] sm:text-[10px] text-white/60">
                             {isInbound

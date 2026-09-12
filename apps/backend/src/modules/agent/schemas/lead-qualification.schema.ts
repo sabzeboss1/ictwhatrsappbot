@@ -53,6 +53,8 @@ export const LeadQualificationOutputSchema = z.object({
   email: z.string().nullable().optional(),
   first_name: z.string().nullable().optional(),
   last_name: z.string().nullable().optional(),
+  send_catalog: z.boolean().default(false),
+  catalog_type: z.string().nullable().optional(),
 });
 
 export type LeadQualificationOutput = z.infer<typeof LeadQualificationOutputSchema>;

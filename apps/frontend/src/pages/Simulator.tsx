@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   AlertCircle,
   MessageSquare,
+  FileText,
 } from 'lucide-react';
 
 export const Simulator: React.FC = () => {
@@ -44,6 +45,14 @@ export const Simulator: React.FC = () => {
       name: 'Marcelle Fotso',
       text: 'Bonjour, je souhaite réserver immédiatement le tour guidé au Mont Cameroun pour 2 personnes le 20 octobre. Je veux payer ma réservation par Orange Money.',
       description: 'Déclenche intention veut_reserver et routage vers Paiement.',
+    },
+    {
+      title: 'Demande Catalogue PDF',
+      icon: FileText,
+      phone: '+237699554433',
+      name: 'Sandrine Mbarga',
+      text: 'Bonjour ! Je prépare nos prochaines vacances au Cameroun et j’aimerais découvrir toutes vos offres. Pouvez-vous m’envoyer votre catalogue complet avec les tarifs au format PDF s’il vous plaît ?',
+      description: 'Déclenche la détection IA du catalogue, l\'envoi du document PDF et la notification en temps réel.',
     },
   ];
 

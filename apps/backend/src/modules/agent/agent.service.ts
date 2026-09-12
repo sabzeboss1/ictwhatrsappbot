@@ -104,26 +104,37 @@ export class AgentService {
   }): Promise<LeadQualificationOutput> {
     const { inboundText, conversationHistory, existingLeadData } = params;
 
-    // 1. Tenter via Anthropic si configuré (soit explicitement, soit si seule clé disponible)
-    if (this.anthropicClient && (env.AI_PROVIDER === 'anthropic' || !this.openaiClient)) {
+    // 1. Tenter via OpenAI si configuré (soit explicitement, soit si configuré par défaut)
+    if (this.openaiClient && (env.AI_PROVIDER === 'openai' || !this.anthropicClient)) {
       try {
-        return await this.callAnthropic(inboundText, conversationHistory, existingLeadData);
-      } catch (err: any) {
-        console.error('[AgentService] Erreur Anthropic Claude:', err?.status || '', err?.message || err);
-      }
-    }
-
-    // 2. Tenter via OpenAI si configuré ou en secours immédiat si Claude a échoué
-    if (this.openaiClient) {
-      try {
-        console.log('[AgentService] Appel du modèle OpenAI gpt-4o-mini...');
+        console.log(`[AgentService] Appel du modèle OpenAI (${env.OPENAI_MODEL || 'gpt-4o-mini'})...`);
         return await this.callOpenAI(inboundText, conversationHistory, existingLeadData);
       } catch (err: any) {
         console.error('[AgentService] Erreur OpenAI:', err?.message || err);
       }
     }
 
-    // 3. Moteur heuristique intelligent de secours (garantit une réponse de haute qualité sans blocage)
+    // 2. Tenter via Anthropic Claude si configuré (soit en provider actif, soit en secours si OpenAI a échoué)
+    if (this.anthropicClient) {
+      try {
+        console.log('[AgentService] Appel du modèle Anthropic Claude...');
+        return await this.callAnthropic(inboundText, conversationHistory, existingLeadData);
+      } catch (err: any) {
+        console.error('[AgentService] Erreur Anthropic Claude:', err?.status || '', err?.message || err);
+      }
+    }
+
+    // 3. Secours OpenAI si Anthropic était le mode par défaut mais a échoué
+    if (this.openaiClient && env.AI_PROVIDER !== 'openai') {
+      try {
+        console.log(`[AgentService] Appel de secours OpenAI (${env.OPENAI_MODEL || 'gpt-4o-mini'})...`);
+        return await this.callOpenAI(inboundText, conversationHistory, existingLeadData);
+      } catch (err: any) {
+        console.error('[AgentService] Erreur OpenAI secours:', err?.message || err);
+      }
+    }
+
+    // 4. Moteur heuristique intelligent de secours (garantit une réponse de haute qualité sans blocage)
     console.warn('[AgentService] Utilisation du moteur heuristique conversationnel ICT (APIs externes injoignables)');
     return this.mockQualifyMessage(inboundText, conversationHistory, existingLeadData);
   }
@@ -154,7 +165,7 @@ export class AgentService {
     ];
 
     const response = await this.openaiClient.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: env.OPENAI_MODEL || 'gpt-4o-mini',
       messages,
       response_format: { type: 'json_object' },
       temperature: 0.3,
@@ -200,7 +211,9 @@ Structure JSON exacte requise :
   "objections": [],
   "first_name": null,
   "last_name": null,
-  "email": null
+  "email": null,
+  "send_catalog": false,
+  "catalog_type": "general"
 }`;
   }
 
@@ -506,9 +519,57 @@ Structure JSON exacte requise :
       whatsapp_message = `Toutes vos informations sont bien enregistrées pour votre séjour à ${recommended_offer || 'Kribi'} (${participants_count} personnes en ${preferred_date}). Souhaitez-vous qu'un conseiller ICT vous appelle pour finaliser les détails ou préférez-vous recevoir le programme par WhatsApp ?`;
     }
 
-    // 11. Garde-fou Anti-Répétition Stricte
+    // 11. Détection de Demande ou Acceptation de Catalogue / Brochure PDF
+    let send_catalog = false;
+    let catalog_type: string = 'general';
+
+    const wantsCatalogDirectly = Boolean(
+      textLower.match(/\b(catalogue|brochure|plaquette|pdf|programme complet|toutes vos offres|tous vos circuits|vos tarifs complets|votre catalogue|envoyez.*catalogue)\b/)
+    );
+
+    const assistantOfferedCatalog =
+      lastAssistantMsg &&
+      (lastAssistantMsg.includes('catalogue') ||
+        lastAssistantMsg.includes('brochure') ||
+        lastAssistantMsg.includes('programme par whatsapp'));
+
+    const userAgreed = Boolean(
+      textLower.match(/\b(oui|d'accord|daccord|ok|volontiers|avec plaisir|je veux bien|envoie|envoyer|partage|transmets|transmettre|pourquoi pas|s'il vous plait|svp)\b/)
+    );
+
+    if (wantsCatalogDirectly || (assistantOfferedCatalog && userAgreed)) {
+      send_catalog = true;
+
+      // Ciblage intelligent de la brochure según l'offre détectée ou le texte
+      if (recommended_offer?.toLowerCase().includes('kribi') || textLower.includes('kribi')) {
+        catalog_type = 'kribi';
+      } else if (recommended_offer?.toLowerCase().includes('ebogo') || textLower.includes('ebogo')) {
+        catalog_type = 'ebogo';
+      } else if (
+        recommended_offer?.toLowerCase().includes('mont cameroun') ||
+        textLower.includes('mont cameroun') ||
+        textLower.includes('buea')
+      ) {
+        catalog_type = 'mont_cameroun';
+      } else {
+        catalog_type = 'general';
+      }
+
+      const catalogLabel =
+        catalog_type === 'kribi'
+          ? 'notre brochure détaillée sur Kribi & les Chutes de la Lobé'
+          : catalog_type === 'ebogo'
+          ? 'notre brochure sur l\'excursion écotourisme à Ebogo'
+          : catalog_type === 'mont_cameroun'
+          ? 'notre guide d\'ascension du Mont Cameroun'
+          : 'notre catalogue officiel Inside Cameroon Tourism 2026';
+
+      whatsapp_message = `Avec grand plaisir ! 📄 Je vous transmets immédiatement ${catalogLabel} au format PDF ci-dessous avec toutes les formules et tarifs détaillés.\n\nPrenez le temps de le consulter et dites-moi quelle expérience vous attire le plus ! 🇨🇲✨`;
+    }
+
+    // 12. Garde-fou Anti-Répétition Stricte
     // Si pour une raison quelconque le message généré est identique au dernier message envoyé
-    if (lastAssistantMsg && (whatsapp_message.trim() === lastAssistantMsg.trim() || (whatsapp_message.length > 25 && lastAssistantMsg.includes(whatsapp_message.slice(0, 25))))) {
+    if (!send_catalog && lastAssistantMsg && (whatsapp_message.trim() === lastAssistantMsg.trim() || (whatsapp_message.length > 25 && lastAssistantMsg.includes(whatsapp_message.slice(0, 25))))) {
       whatsapp_message = `C'est bien noté ! Nous finalisons la proposition idéale pour votre projet de séjour. Souhaitez-vous qu'un conseiller Inside Cameroon Tourism prenne contact avec vous directement par appel pour affiner votre devis ?`;
     }
 
@@ -534,6 +595,8 @@ Structure JSON exacte requise :
       first_name: null,
       last_name: null,
       email: null,
+      send_catalog,
+      catalog_type,
     };
   }
 }
