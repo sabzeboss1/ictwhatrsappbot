@@ -1,3 +1,4 @@
+import axios from 'axios';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../config/env.js';
@@ -105,8 +106,18 @@ export class AgentService {
   }): Promise<LeadQualificationOutput> {
     const { inboundText, conversationHistory, existingLeadData } = params;
 
-    // 1. Tenter via OpenAI si configuré (soit explicitement, soit si configuré par défaut)
-    if (this.openaiClient && (env.AI_PROVIDER === 'openai' || !this.anthropicClient)) {
+    // 1. Tenter via Google Gemini si configuré (soit explicitement, soit si aucun client OpenAI/Anthropic)
+    if (env.GEMINI_API_KEY && (env.AI_PROVIDER === 'gemini' || (!this.openaiClient && !this.anthropicClient))) {
+      try {
+        console.log(`[AgentService] Appel du moteur Google Gemini (${env.GEMINI_MODEL || 'gemini-flash-latest'})...`);
+        return await this.callGemini(inboundText, conversationHistory, existingLeadData);
+      } catch (err: any) {
+        console.error('[AgentService] Erreur Google Gemini:', err?.message || err);
+      }
+    }
+
+    // 2. Tenter via OpenAI si configuré
+    if (this.openaiClient && (env.AI_PROVIDER === 'openai' || (!this.anthropicClient && !env.GEMINI_API_KEY) || env.AI_PROVIDER === 'gemini')) {
       try {
         console.log(`[AgentService] Appel du modèle OpenAI (${env.OPENAI_MODEL || 'gpt-4o-mini'})...`);
         return await this.callOpenAI(inboundText, conversationHistory, existingLeadData);
@@ -115,7 +126,7 @@ export class AgentService {
       }
     }
 
-    // 2. Tenter via Anthropic Claude si configuré (soit en provider actif, soit en secours si OpenAI a échoué)
+    // 3. Tenter via Anthropic Claude si configuré
     if (this.anthropicClient) {
       try {
         console.log('[AgentService] Appel du modèle Anthropic Claude...');
@@ -125,7 +136,17 @@ export class AgentService {
       }
     }
 
-    // 3. Secours OpenAI si Anthropic était le mode par défaut mais a échoué
+    // 4. Secours Gemini si OpenAI ou Anthropic était configuré par défaut mais a échoué
+    if (env.GEMINI_API_KEY && env.AI_PROVIDER !== 'gemini') {
+      try {
+        console.log(`[AgentService] Appel de secours Google Gemini (${env.GEMINI_MODEL || 'gemini-flash-latest'})...`);
+        return await this.callGemini(inboundText, conversationHistory, existingLeadData);
+      } catch (err: any) {
+        console.error('[AgentService] Erreur Google Gemini secours:', err?.message || err);
+      }
+    }
+
+    // 5. Secours OpenAI si Anthropic était le mode par défaut mais a échoué
     if (this.openaiClient && env.AI_PROVIDER !== 'openai') {
       try {
         console.log(`[AgentService] Appel de secours OpenAI (${env.OPENAI_MODEL || 'gpt-4o-mini'})...`);
@@ -135,9 +156,136 @@ export class AgentService {
       }
     }
 
-    // 4. Moteur heuristique intelligent de secours (garantit une réponse de haute qualité sans blocage)
+    // 6. Moteur heuristique intelligent de secours (garantit une réponse de haute qualité sans blocage)
     console.warn('[AgentService] Utilisation du moteur heuristique conversationnel ICT (APIs externes injoignables)');
     return this.mockQualifyMessage(inboundText, conversationHistory, existingLeadData);
+  }
+
+  /**
+   * Intégration officielle de Google Gemini avec bascule multi-modèles dynamique en cas de pic de charge 503.
+   */
+  public async callGemini(
+    inboundText: string,
+    history: Array<{ role: 'user' | 'assistant'; content: string }>,
+    existingLeadData?: any
+  ): Promise<LeadQualificationOutput> {
+    if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY non configurée');
+
+    // Charger le prompt actif depuis la DB (avec cache)
+    const activePrompt = await this.getActivePrompt();
+    const systemPrompt = this.buildSystemPromptWithSchema(
+      activePrompt.prompt,
+      existingLeadData,
+      existingLeadData?.campaign
+    );
+
+    // Filtrer l'historique pour éviter les doublons avec le message entrant
+    const filteredHistory = [...history];
+    if (
+      filteredHistory.length > 0 &&
+      filteredHistory[filteredHistory.length - 1].role === 'user' &&
+      filteredHistory[filteredHistory.length - 1].content.trim() === inboundText.trim()
+    ) {
+      filteredHistory.pop();
+    }
+
+    // Formater l'historique pour l'API Gemini ('user' et 'model') avec alternance stricte
+    const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+    for (const h of filteredHistory) {
+      if (!h.content || !h.content.trim()) continue;
+      const role = h.role === 'user' ? 'user' : 'model';
+      if (contents.length > 0 && contents[contents.length - 1].role === role) {
+        contents[contents.length - 1].parts[0].text += '\n' + h.content;
+      } else {
+        contents.push({ role, parts: [{ text: h.content }] });
+      }
+    }
+
+    // Ajouter le message entrant
+    if (contents.length > 0 && contents[contents.length - 1].role === 'user') {
+      contents[contents.length - 1].parts[0].text += '\n' + inboundText;
+    } else {
+      contents.push({ role: 'user', parts: [{ text: inboundText }] });
+    }
+
+    // Gemini exige impérativement que le premier message soit 'user'
+    if (contents.length > 0 && contents[0].role !== 'user') {
+      contents.shift();
+    }
+
+    if (contents.length === 0) {
+      contents.push({ role: 'user', parts: [{ text: inboundText }] });
+    }
+
+    const payload = {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }],
+      },
+      contents,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.3,
+      },
+    };
+
+    // Modèles candidats ordonnés avec bascule automatique
+    const candidateModels = Array.from(
+      new Set(
+        [
+          env.GEMINI_MODEL,
+          'gemini-flash-latest',
+          'gemini-flash-lite-latest',
+          'gemini-2.5-flash',
+          'gemini-2.5-flash-lite',
+        ].filter(Boolean) as string[]
+      )
+    );
+
+    let rawText: string | null = null;
+    let lastError: any = null;
+
+    for (const model of candidateModels) {
+      try {
+        console.log(`[AgentService] Tentative Gemini avec modèle: ${model}...`);
+        const response = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+          payload,
+          {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 20000,
+          }
+        );
+
+        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          console.log(`✓ [AgentService] Réponse Gemini générée avec succès via ${model} !`);
+          rawText = text;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const status = err.response?.status;
+        const msg = err.response?.data?.error?.message || err.message;
+        console.warn(`[AgentService] Modèle Gemini ${model} indisponible (HTTP ${status || 'ERR'}: ${msg?.slice(0, 80)}...). Essai modèle suivant...`);
+      }
+    }
+
+    if (!rawText) {
+      console.error('[AgentService] Tous les modèles Gemini ont échoué:', lastError?.response?.data || lastError?.message);
+      throw lastError || new Error('Tous les modèles Gemini ont échoué');
+    }
+
+    // Extraire le JSON même s'il est enveloppé dans du markdown
+    let jsonStr = rawText.trim();
+    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || jsonStr.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1] || jsonMatch[0];
+    }
+
+    const parsed = JSON.parse(jsonStr);
+    this.normalizeOutputKeys(parsed);
+    return LeadQualificationOutputSchema.parse(parsed);
   }
 
   private async callOpenAI(

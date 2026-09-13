@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:seed": "tsx src/prisma/seed.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:gemini": "node scripts/test-gemini.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

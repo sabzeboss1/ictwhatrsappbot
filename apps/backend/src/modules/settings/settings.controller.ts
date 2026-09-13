@@ -52,12 +52,18 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         ? 'Claude Sonnet'
         : env.ANTHROPIC_MODEL;
 
-      if (env.AI_PROVIDER === 'openai' && env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 5) {
+      if (env.AI_PROVIDER === 'gemini' && env.GEMINI_API_KEY && env.GEMINI_API_KEY.length > 5) {
+        aiConfigured = true;
+        activeProvider = `Google Gemini (${env.GEMINI_MODEL || 'gemini-flash-latest'})`;
+      } else if (env.AI_PROVIDER === 'openai' && env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 5) {
         aiConfigured = true;
         activeProvider = `OpenAI (${env.OPENAI_MODEL || 'gpt-4o-mini'})`;
       } else if (env.AI_PROVIDER === 'anthropic' && env.ANTHROPIC_API_KEY && env.ANTHROPIC_API_KEY.length > 5) {
         aiConfigured = true;
         activeProvider = `Anthropic (${anthropicModelDisplay})`;
+      } else if (env.GEMINI_API_KEY && env.GEMINI_API_KEY.length > 5) {
+        aiConfigured = true;
+        activeProvider = `Google Gemini (${env.GEMINI_MODEL || 'gemini-flash-latest'})`;
       } else if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.length > 5) {
         aiConfigured = true;
         activeProvider = `OpenAI (${env.OPENAI_MODEL || 'gpt-4o-mini'})`;
