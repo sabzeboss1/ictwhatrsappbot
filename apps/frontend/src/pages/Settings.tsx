@@ -344,10 +344,12 @@ export const Settings: React.FC = () => {
       description?: string;
       triggerCondition?: string;
       category?: string;
+      campaign?: string | null;
       campaignSlug?: string | null;
       caption?: string;
       isDefault?: boolean;
       fileName: string;
+      fileBase64: string;
       pdfBase64: string;
     }) => {
       const res = await api.post('/api/catalogues/upload', payload);
@@ -423,10 +425,12 @@ export const Settings: React.FC = () => {
       description: catalogDescription.trim() || undefined,
       triggerCondition: catalogTriggerCondition.trim() || undefined,
       category: catalogCategory,
+      campaign: catalogCampaignSlug ? catalogCampaignSlug : null,
       campaignSlug: catalogCampaignSlug ? catalogCampaignSlug : null,
       caption: catalogCaption.trim() || undefined,
       isDefault: catalogIsDefault,
       fileName: catalogFile.name,
+      fileBase64: catalogBase64,
       pdfBase64: catalogBase64,
     });
   };

@@ -29,6 +29,30 @@ describe('CatalogService & PDF Generation', () => {
     expect(base64DataUri).toMatch(/^data:application\/pdf;base64,[A-Za-z0-9+/=]+$/);
     expect(item.fileName).toBe('Catalogue_ICT_Tourisme_2026.pdf');
   });
+
+  it('should accept uploaded catalogue with pdfBase64 and data URI prefix', async () => {
+    // Faux PDF minimal valide contenant les magic bytes %PDF-1.4
+    const fakePdfContent = '%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF';
+    const fakeBase64 = `data:application/pdf;base64,${Buffer.from(fakePdfContent).toString('base64')}`;
+
+    const uploaded = await catalogService.addUploadedCatalog({
+      title: 'Brochure Test Randonnée 2026',
+      fileName: 'Brochure_Test_Rando.pdf',
+      pdfBase64: fakeBase64,
+      category: 'randonnee',
+      campaignSlug: 'campagne-rando-2026',
+      triggerCondition: 'Proposer si le client aime marcher en montagne',
+    });
+
+    expect(uploaded).toBeDefined();
+    expect(uploaded.id).toMatch(/^cat_/);
+    expect(uploaded.title).toBe('Brochure Test Randonnée 2026');
+    expect(uploaded.campaignSlug).toBe('campagne-rando-2026');
+    expect(uploaded.publicUrl).toContain('/api/catalogues/download/');
+
+    // Nettoyage après test
+    catalogService.deleteCatalog(uploaded.id);
+  });
 });
 
 describe('Lead Qualification with Catalog Detection', () => {

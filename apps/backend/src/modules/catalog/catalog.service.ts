@@ -19,6 +19,7 @@ export interface CatalogItem {
   isDefault?: boolean;
   isCustom?: boolean;
   campaign?: string | null; // Slug de la campagne ou du prompt associé (optionnel)
+  campaignSlug?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -266,40 +267,50 @@ export class CatalogService {
    */
   public async addUploadedCatalog(params: {
     title: string;
-    fileName: string;
-    fileBase64: string;
+    fileName?: string;
+    fileBase64?: string;
+    pdfBase64?: string;
     description?: string;
     triggerCondition?: string;
     caption?: string;
     category?: string;
     campaign?: string | null;
+    campaignSlug?: string | null;
     isDefault?: boolean;
   }): Promise<CatalogItem> {
-    const { title, fileName, fileBase64, description, triggerCondition, caption, category, campaign, isDefault } = params;
+    const title = (params.title || '').trim();
+    const fileBase64 = params.fileBase64 || params.pdfBase64;
+    const campaign = params.campaign ?? params.campaignSlug ?? null;
+    const fileName = params.fileName || `${title || 'Catalogue'}.pdf`;
+    const description = params.description;
+    const triggerCondition = params.triggerCondition;
+    const caption = params.caption;
+    const category = params.category;
+    const isDefault = params.isDefault;
 
-    if (!title || !title.trim()) {
+    if (!title) {
       throw new Error('Le titre du catalogue est obligatoire.');
     }
     if (!fileBase64) {
       throw new Error('Aucun fichier PDF fourni.');
     }
 
-    // Extraction du contenu binaire
-    const cleanBase64 = fileBase64.replace(/^data:application\/pdf;base64,/, '').replace(/\s/g, '');
+    // Extraction du contenu binaire : éliminer tout préfixe data: URI (ex: data:application/pdf;base64, etc.)
+    const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
     const buffer = Buffer.from(cleanBase64, 'base64');
 
-    if (buffer.length < 50) {
+    if (buffer.length < 20) {
       throw new Error('Le fichier transmis est vide ou corrompu.');
     }
 
-    // Validation du format PDF (magic bytes %PDF)
-    const header = buffer.subarray(0, 10).toString('latin1');
+    // Validation du format PDF (magic bytes %PDF dans les 1024 premiers octets)
+    const header = buffer.subarray(0, 1024).toString('latin1');
     if (!header.includes('%PDF')) {
-      throw new Error('Le fichier sélectionné n\'est pas un document PDF valide.');
+      throw new Error("Le fichier sélectionné n'est pas un document PDF valide.");
     }
 
     // Nettoyage sécurisé du nom de fichier
-    let safeName = (fileName || `${title}.pdf`)
+    let safeName = fileName
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -343,6 +354,7 @@ export class CatalogService {
       isDefault: Boolean(isDefault),
       isCustom: true,
       campaign: campaign || null,
+      campaignSlug: campaign || null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

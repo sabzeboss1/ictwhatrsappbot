@@ -43,13 +43,15 @@ export async function catalogRoutes(fastify: FastifyInstance) {
         request: FastifyRequest<{
           Body: {
             title: string;
-            fileName: string;
-            fileBase64: string;
+            fileName?: string;
+            fileBase64?: string;
+            pdfBase64?: string;
             description?: string;
             triggerCondition?: string;
             caption?: string;
             category?: string;
             campaign?: string | null;
+            campaignSlug?: string | null;
             isDefault?: boolean;
           };
         }>,
@@ -57,17 +59,26 @@ export async function catalogRoutes(fastify: FastifyInstance) {
       ) => {
         try {
           const body = request.body || ({} as any);
+          console.log('[CatalogController] 📥 POST /api/catalogues/upload reçu :', {
+            title: body.title,
+            fileName: body.fileName,
+            hasFileBase64: Boolean(body.fileBase64),
+            hasPdfBase64: Boolean(body.pdfBase64),
+          });
+
           const newItem = await catalogService.addUploadedCatalog(body);
 
           // Invalider le cache du prompt pour que l'IA intègre immédiatement le nouveau catalogue
           agentService.invalidatePromptCache();
 
+          console.log(`✓ [CatalogController] Catalogue "${newItem.title}" créé avec succès (ID: ${newItem.id})`);
           return reply.status(201).send({
             success: true,
             message: `Catalogue "${newItem.title}" importé et activé avec succès !`,
             catalog: newItem,
           });
         } catch (err: any) {
+          console.error('[CatalogController] ❌ Erreur upload catalogue :', err.message);
           return reply.status(400).send({ error: err.message || 'Erreur lors de l\'importation du catalogue' });
         }
       }
