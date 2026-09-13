@@ -55,6 +55,7 @@ export const LeadQualificationOutputSchema = z.object({
   last_name: z.string().nullable().optional(),
   send_catalog: z.boolean().default(false),
   catalog_type: z.string().nullable().optional(),
+  catalog_id: z.string().nullable().optional(),
 });
 
 export type LeadQualificationOutput = z.infer<typeof LeadQualificationOutputSchema>;

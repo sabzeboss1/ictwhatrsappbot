@@ -436,13 +436,13 @@ export class WhatsAppService {
     // Envoi automatique du catalogue ou de la brochure PDF si demandé ou accepté par le prospect
     if (aiOutput.send_catalog) {
       console.log(
-        `[WhatsAppService] 📄 Déclenchement envoi automatique catalogue/brochure PDF (${aiOutput.catalog_type || 'general'}) vers ${phone}`
+        `[WhatsAppService] 📄 Déclenchement envoi automatique catalogue/brochure PDF (${aiOutput.catalog_id || aiOutput.catalog_type || 'general'}) vers ${phone}`
       );
       setTimeout(async () => {
         try {
           await this.sendWhatsAppDocument({
             phone,
-            catalogIdOrCategory: aiOutput.catalog_type,
+            catalogIdOrCategory: aiOutput.catalog_id || aiOutput.catalog_type,
             leadId: updatedLead.id,
           });
         } catch (err: any) {

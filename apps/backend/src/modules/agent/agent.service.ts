@@ -7,6 +7,7 @@ import {
   LeadQualificationOutputSchema,
 } from './schemas/lead-qualification.schema.js';
 import { prisma } from '../../plugins/prisma.js';
+import { catalogService } from '../catalog/catalog.service.js';
 
 export class AgentService {
   private openaiClient: OpenAI | null = null;
@@ -152,7 +153,7 @@ export class AgentService {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData),
+        content: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData, existingLeadData?.campaign),
       },
       ...history.map((h) => ({
         role: h.role,
@@ -179,8 +180,19 @@ export class AgentService {
     return LeadQualificationOutputSchema.parse(parsed);
   }
 
-  private buildSystemPromptWithSchema(basePrompt: string, existingLeadData?: any): string {
+  private buildSystemPromptWithSchema(
+    basePrompt: string,
+    existingLeadData?: any,
+    campaignSlug?: string | null
+  ): string {
+    // Injection dynamique en temps réel de tous les catalogues disponibles et de leurs règles
+    const dynamicCatalogContext = catalogService.generatePromptContext(campaignSlug);
+
     return `${basePrompt}
+
+══════════════════════════════════════════════════════════════
+${dynamicCatalogContext}
+══════════════════════════════════════════════════════════════
 
 Données actuelles connues sur ce prospect:
 ${JSON.stringify(existingLeadData || {}, null, 2)}
@@ -213,6 +225,7 @@ Structure JSON exacte requise :
   "last_name": null,
   "email": null,
   "send_catalog": false,
+  "catalog_id": "ict-general-2026",
   "catalog_type": "general"
 }`;
   }
@@ -299,7 +312,7 @@ Structure JSON exacte requise :
         response = await this.anthropicClient.messages.create({
           model: m,
           max_tokens: 1024,
-          system: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData),
+          system: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData, existingLeadData?.campaign),
           messages: rawMessages,
         });
         if (response && response.content?.[0]) {
@@ -519,9 +532,10 @@ Structure JSON exacte requise :
       whatsapp_message = `Toutes vos informations sont bien enregistrées pour votre séjour à ${recommended_offer || 'Kribi'} (${participants_count} personnes en ${preferred_date}). Souhaitez-vous qu'un conseiller ICT vous appelle pour finaliser les détails ou préférez-vous recevoir le programme par WhatsApp ?`;
     }
 
-    // 11. Détection de Demande ou Acceptation de Catalogue / Brochure PDF
+    // 11. Détection dynamique de Demande ou Acceptation de Catalogue PDF
     let send_catalog = false;
     let catalog_type: string = 'general';
+    let catalog_id: string | null = null;
 
     const wantsCatalogDirectly = Boolean(
       textLower.match(/\b(catalogue|brochure|plaquette|pdf|programme complet|toutes vos offres|tous vos circuits|vos tarifs complets|votre catalogue|envoyez.*catalogue)\b/)
@@ -540,35 +554,40 @@ Structure JSON exacte requise :
     if (wantsCatalogDirectly || (assistantOfferedCatalog && userAgreed)) {
       send_catalog = true;
 
-      // Ciblage intelligent de la brochure según l'offre détectée ou le texte
-      if (recommended_offer?.toLowerCase().includes('kribi') || textLower.includes('kribi')) {
-        catalog_type = 'kribi';
-      } else if (recommended_offer?.toLowerCase().includes('ebogo') || textLower.includes('ebogo')) {
-        catalog_type = 'ebogo';
-      } else if (
-        recommended_offer?.toLowerCase().includes('mont cameroun') ||
-        textLower.includes('mont cameroun') ||
-        textLower.includes('buea')
-      ) {
-        catalog_type = 'mont_cameroun';
-      } else {
-        catalog_type = 'general';
+      // Recherche dynamique parmi tous les catalogues enregistrés dans le système
+      const allCatalogs = catalogService.listCatalogs();
+      let matched = allCatalogs.find((c) => {
+        const cTitle = c.title.toLowerCase();
+        const cCat = c.category.toLowerCase();
+        const cTrig = (c.triggerCondition || '').toLowerCase();
+
+        // 1. Mots de la consigne ou du titre trouvés dans le message client
+        if (textLower.includes(cCat) || (c.fileName && textLower.includes(c.fileName.toLowerCase()))) return true;
+        if (cTitle.includes('kribi') && textLower.includes('kribi')) return true;
+        if (cTitle.includes('ebogo') && textLower.includes('ebogo')) return true;
+        if (cTitle.includes('mont cameroun') && (textLower.includes('mont cameroun') || textLower.includes('buea'))) return true;
+
+        // 2. Offre recommandée correspondante
+        if (recommended_offer) {
+          const recLower = recommended_offer.toLowerCase();
+          if (cCat !== 'general' && recLower.includes(cCat)) return true;
+          if (cTitle.includes(recLower) || recLower.includes(cCat) || cTrig.includes(recLower)) return true;
+        }
+
+        return false;
+      });
+
+      if (!matched) {
+        matched = catalogService.getDefaultCatalog();
       }
 
-      const catalogLabel =
-        catalog_type === 'kribi'
-          ? 'notre brochure détaillée sur Kribi & les Chutes de la Lobé'
-          : catalog_type === 'ebogo'
-          ? 'notre brochure sur l\'excursion écotourisme à Ebogo'
-          : catalog_type === 'mont_cameroun'
-          ? 'notre guide d\'ascension du Mont Cameroun'
-          : 'notre catalogue officiel Inside Cameroon Tourism 2026';
+      catalog_id = matched.id;
+      catalog_type = matched.category;
 
-      whatsapp_message = `Avec grand plaisir ! 📄 Je vous transmets immédiatement ${catalogLabel} au format PDF ci-dessous avec toutes les formules et tarifs détaillés.\n\nPrenez le temps de le consulter et dites-moi quelle expérience vous attire le plus ! 🇨🇲✨`;
+      whatsapp_message = `Avec grand plaisir ! 📄 Je vous transmets immédiatement ${matched.title} au format PDF ci-dessous avec toutes les formules et tarifs détaillés.\n\nPrenez le temps de le consulter et dites-moi quelle expérience vous attire le plus ! 🇨🇲✨`;
     }
 
     // 12. Garde-fou Anti-Répétition Stricte
-    // Si pour une raison quelconque le message généré est identique au dernier message envoyé
     if (!send_catalog && lastAssistantMsg && (whatsapp_message.trim() === lastAssistantMsg.trim() || (whatsapp_message.length > 25 && lastAssistantMsg.includes(whatsapp_message.slice(0, 25))))) {
       whatsapp_message = `C'est bien noté ! Nous finalisons la proposition idéale pour votre projet de séjour. Souhaitez-vous qu'un conseiller Inside Cameroon Tourism prenne contact avec vous directement par appel pour affiner votre devis ?`;
     }
@@ -597,6 +616,7 @@ Structure JSON exacte requise :
       email: null,
       send_catalog,
       catalog_type,
+      catalog_id,
     };
   }
 }

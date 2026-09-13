@@ -52,7 +52,7 @@ describe('Lead Qualification with Catalog Detection', () => {
     );
 
     expect(result.send_catalog).toBe(true);
-    expect(result.whatsapp_message).toContain('catalogue officiel');
+    expect(result.whatsapp_message.toLowerCase()).toContain('catalogue officiel');
   });
 
   it('should detect agreement when previous assistant message offered catalogue', () => {

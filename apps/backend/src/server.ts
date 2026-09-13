@@ -22,6 +22,7 @@ import { catalogRoutes } from './modules/catalog/catalog.controller.js';
 import { catalogService } from './modules/catalog/catalog.service.js';
 
 const fastify = Fastify({
+  bodyLimit: 35 * 1024 * 1024, // 35 Mo pour l'import de documents PDF de catalogues
   logger: {
     transport:
       env.NODE_ENV === 'development'

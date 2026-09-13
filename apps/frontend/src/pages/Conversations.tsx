@@ -19,6 +19,7 @@ import {
   Info,
   X,
   FileText,
+  ChevronDown,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
@@ -35,6 +36,7 @@ export const Conversations: React.FC = () => {
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [mobileShowChat, setMobileShowChat] = useState(false);
   const [sendingCatalog, setSendingCatalog] = useState(false);
+  const [showCatalogDropdown, setShowCatalogDropdown] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -46,6 +48,15 @@ export const Conversations: React.FC = () => {
       return res.data;
     },
     refetchInterval: 10000,
+  });
+
+  // Liste des catalogues PDF disponibles
+  const { data: catalogues } = useQuery({
+    queryKey: ['catalogues'],
+    queryFn: async () => {
+      const res = await api.get('/api/catalogues');
+      return res.data;
+    },
   });
 
   // Sélectionner la première conversation par défaut sur desktop
@@ -118,12 +129,13 @@ export const Conversations: React.FC = () => {
     }
   };
 
-  // Envoi manuel du catalogue PDF officiel
-  const handleSendCatalog = async () => {
+  // Envoi manuel d'un catalogue PDF officiel
+  const handleSendCatalog = async (catalogId?: string) => {
     if (!selectedLeadId || sendingCatalog) return;
     setSendingCatalog(true);
+    setShowCatalogDropdown(false);
     try {
-      await api.post(`/api/leads/${selectedLeadId}/send-catalog`);
+      await api.post(`/api/leads/${selectedLeadId}/send-catalog`, { catalogId });
       queryClient.invalidateQueries({ queryKey: ['lead', selectedLeadId] });
       queryClient.invalidateQueries({ queryKey: ['conversations'] });
     } catch (err) {
@@ -363,15 +375,58 @@ export const Conversations: React.FC = () => {
                   <span className="hidden sm:inline">Reset</span>
                 </button>
 
-                <button
-                  onClick={handleSendCatalog}
-                  disabled={sendingCatalog}
-                  className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all border bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50"
-                  title="Envoyer immédiatement le Catalogue PDF à ce prospect"
-                >
-                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden sm:inline">{sendingCatalog ? 'Envoi...' : 'Envoyer Catalogue PDF'}</span>
-                </button>
+                <div className="relative">
+                  <div className="flex items-center">
+                    <button
+                      onClick={() => handleSendCatalog()}
+                      disabled={sendingCatalog}
+                      className={`flex items-center gap-1 px-2 sm:px-2.5 py-1.5 text-xs font-semibold transition-all border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 ${
+                        catalogues && catalogues.length > 1 ? 'rounded-l-xl' : 'rounded-xl'
+                      }`}
+                      title="Envoyer le Catalogue PDF par défaut à ce prospect"
+                    >
+                      <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="hidden sm:inline">{sendingCatalog ? 'Envoi...' : 'Envoyer Catalogue PDF'}</span>
+                    </button>
+                    {catalogues && catalogues.length > 1 && (
+                      <button
+                        onClick={() => setShowCatalogDropdown(!showCatalogDropdown)}
+                        disabled={sendingCatalog}
+                        className="px-1.5 py-1.5 rounded-r-xl border border-l-0 border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                        title="Choisir un catalogue spécifique à envoyer"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5 text-emerald-400" />
+                      </button>
+                    )}
+                  </div>
+
+                  {showCatalogDropdown && catalogues && catalogues.length > 1 && (
+                    <div className="absolute right-0 mt-1.5 w-64 bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl z-50 p-1.5 space-y-1 backdrop-blur-md">
+                      <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                        Choisir le document à envoyer
+                      </div>
+                      <div className="max-h-56 overflow-y-auto space-y-1">
+                        {catalogues.map((cat: any) => (
+                          <button
+                            key={cat.id}
+                            onClick={() => handleSendCatalog(cat.id)}
+                            className="w-full text-left p-2 rounded-lg hover:bg-slate-800 transition-colors text-xs flex items-center justify-between gap-2 group"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="font-semibold text-white truncate group-hover:text-emerald-300">{cat.title}</p>
+                              <p className="text-[10px] text-slate-400 truncate">{cat.fileName}</p>
+                            </div>
+                            {cat.isDefault && (
+                              <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded font-bold shrink-0">
+                                Défaut
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 <button
                   onClick={() => setShowDetailPanel(!showDetailPanel)}

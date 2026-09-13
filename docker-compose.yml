@@ -92,6 +92,8 @@ services:
       EVOLUTION_WEBHOOK_SECRET: ${EVOLUTION_WEBHOOK_SECRET:-ict_evolution_secret_token_2026}
       HUBSPOT_ACCESS_TOKEN: ${HUBSPOT_ACCESS_TOKEN}
       HUBSPOT_PIPELINE_ID: ${HUBSPOT_PIPELINE_ID:-default}
+    volumes:
+      - catalogues_data:/app/public/catalogues
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,3 +132,5 @@ volumes:
   evolution_instances:
   caddy_data:
   caddy_config:
+  catalogues_data:
+
