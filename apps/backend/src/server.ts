@@ -134,6 +134,16 @@ async function bootstrap() {
           },
         });
         console.log('✓ [Startup] Prompt par défaut créé et activé');
+      } else if (existingDefault.version !== PROMPT_VERSION) {
+        console.log(`[Startup] Mise à jour du prompt par défaut: v${existingDefault.version} → v${PROMPT_VERSION}`);
+        await prisma.promptTemplate.update({
+          where: { id: existingDefault.id },
+          data: {
+            prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
+            version: PROMPT_VERSION,
+          },
+        });
+        console.log(`✓ [Startup] Prompt par défaut mis à jour avec succès (v${PROMPT_VERSION})`);
       } else {
         console.log(`✓ [Startup] Prompt par défaut existant: "${existingDefault.name}" (v${existingDefault.version})`);
       }

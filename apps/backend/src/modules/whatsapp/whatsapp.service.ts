@@ -274,7 +274,54 @@ export class WhatsAppService {
       });
     }
 
-    // 3. Enregistrer le message entrant
+    // 3. Gestion du TTL d'inactivité de session (Anti-blocage / Context Reset)
+    // Si le prospect n'a pas échangé depuis plus de SESSION_TTL_MINUTES (défaut: 120 min),
+    // la session précédente est expirée : on réinitialise l'intention et l'offre en cours.
+    const lastMessage = await prisma.message.findFirst({
+      where: { leadId: lead.id },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const sessionTtlMinutes = env.SESSION_TTL_MINUTES || 120;
+    const sessionTtlMs = sessionTtlMinutes * 60 * 1000;
+    const isSessionExpired = lastMessage
+      ? Date.now() - lastMessage.createdAt.getTime() > sessionTtlMs
+      : false;
+
+    if (isSessionExpired) {
+      const minutesInactive = Math.round(
+        (Date.now() - lastMessage!.createdAt.getTime()) / 60000
+      );
+      console.log(
+        `[WhatsAppService] ⏱️ Expiration de session pour ${phone} (${minutesInactive} min d'inactivité > ${sessionTtlMinutes} min TTL). Réinitialisation de la mémoire et du contexte prospect.`
+      );
+
+      // Réinitialiser les données volatiles pour repartir sur une page blanche
+      lead = await prisma.lead.update({
+        where: { id: lead.id },
+        data: {
+          conversationStage: 'NEW_CONTACT',
+          intent: null,
+          need: null,
+          recommendedOffer: null,
+          purchaseIntent: 'information',
+          productIdentified: false,
+          availabilityConfirmed: false,
+          productStandard: false,
+          customRequest: false,
+          preferredDate: null,
+          budget: null,
+          participantsCount: null,
+          objections: [],
+          qualificationScore: 0,
+          leadStatus: 'Nouveau',
+          nextStep: 'Qualification',
+        },
+      });
+      emitLeadUpdated(lead);
+    }
+
+    // 4. Enregistrer le message entrant
     const inboundMessage = await prisma.message.create({
       data: {
         leadId: lead.id,
@@ -344,6 +391,61 @@ export class WhatsAppService {
   }
 
   /**
+   * Récupère l'historique des messages appartenant à la session active en cours.
+   * Si une interruption d'inactivité supérieure au TTL (SESSION_TTL_MINUTES, défaut 120m) est détectée,
+   * tous les messages antérieurs à cette coupure sont ignorés pour éviter toute pollution de contexte.
+   */
+  public async getActiveSessionMessages(
+    leadId: string,
+    currentInboundText?: string
+  ): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
+    const sessionTtlMinutes = env.SESSION_TTL_MINUTES || 120;
+    const ttlMs = sessionTtlMinutes * 60 * 1000;
+
+    // Récupérer les 30 derniers messages du plus récent au plus ancien
+    const recentMessages = await prisma.message.findMany({
+      where: { leadId },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    });
+
+    if (recentMessages.length === 0) return [];
+
+    // Détecter la coupure d'inactivité de session
+    const sessionMessages: typeof recentMessages = [];
+    let previousTime = Date.now();
+
+    for (const msg of recentMessages) {
+      const msgTime = msg.createdAt.getTime();
+      // Si l'écart temporel entre deux messages consécutifs dépasse le TTL, on coupe
+      if (previousTime - msgTime > ttlMs && sessionMessages.length > 0) {
+        break;
+      }
+      sessionMessages.push(msg);
+      previousTime = msgTime;
+    }
+
+    // Remettre dans l'ordre chronologique (du plus ancien au plus récent)
+    sessionMessages.reverse();
+
+    // Exclure le tout dernier message s'il correspond au message entrant actuel
+    // (car l'agent IA l'ajoute directement comme message utilisateur courant)
+    if (
+      currentInboundText &&
+      sessionMessages.length > 0 &&
+      sessionMessages[sessionMessages.length - 1].direction === 'inbound' &&
+      sessionMessages[sessionMessages.length - 1].content.trim() === currentInboundText.trim()
+    ) {
+      sessionMessages.pop();
+    }
+
+    return sessionMessages.map((m) => ({
+      role: (m.direction === 'inbound' ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: m.content,
+    }));
+  }
+
+  /**
    * Traitement du message par l'agent IA, scoring et synchronisations
    */
   public async processLeadThroughAI(data: { leadId: string; inboundText: string; phone: string }) {
@@ -351,21 +453,16 @@ export class WhatsAppService {
 
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
-          take: 20,
-        },
-      },
     });
 
     if (!lead) return;
 
-    // Historique formaté
-    const history = lead.messages.map((m) => ({
-      role: (m.direction === 'inbound' ? 'user' : 'assistant') as 'user' | 'assistant',
-      content: m.content,
-    }));
+    // Historique formaté limité à la session active courante (anti-pollution de contexte)
+    const history = await this.getActiveSessionMessages(lead.id, inboundText);
+
+    console.log(
+      `[WhatsAppService] 🧠 Traitement IA pour ${phone} — Historique session active: ${history.length} messages (TTL: ${env.SESSION_TTL_MINUTES || 120} min)`
+    );
 
     // Appel Agent IA
     const aiOutput = await agentService.qualifyMessage({

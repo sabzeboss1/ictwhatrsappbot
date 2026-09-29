@@ -18,13 +18,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package.json ./
-RUN npm install --omit=dev
-
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/src ./src
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
 EXPOSE 3001
 
-CMD ["node", "dist/server.js"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

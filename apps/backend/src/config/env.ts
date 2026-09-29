@@ -29,6 +29,9 @@ const envSchema = z.object({
   HUBSPOT_ACCESS_TOKEN: z.string().optional().default(''),
   HUBSPOT_PIPELINE_ID: z.string().default('default'),
 
+  // Session & Mémoire IA
+  SESSION_TTL_MINUTES: z.coerce.number().default(120), // 120 minutes (2 heures) d'inactivité avant réinitialisation automatique
+
   CORS_ORIGIN: z.string().default('*'),
 });
 

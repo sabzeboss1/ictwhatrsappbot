@@ -336,14 +336,39 @@ export class AgentService {
     // Injection dynamique en temps réel de tous les catalogues disponibles et de leurs règles
     const dynamicCatalogContext = catalogService.generatePromptContext(campaignSlug);
 
+    // Extraction épurée des données pertinentes du lead (sans métadonnées internes)
+    const sanitizedLeadData = existingLeadData
+      ? {
+          firstName: existingLeadData.firstName || undefined,
+          lastName: existingLeadData.lastName || undefined,
+          customerType: existingLeadData.customerType || undefined,
+          conversationStage: existingLeadData.conversationStage || undefined,
+          intent: existingLeadData.intent || undefined,
+          need: existingLeadData.need || undefined,
+          recommendedOffer: existingLeadData.recommendedOffer || undefined,
+          preferredDate: existingLeadData.preferredDate || undefined,
+          participantsCount: existingLeadData.participantsCount || undefined,
+          budget: existingLeadData.budget || undefined,
+        }
+      : {};
+
     return `${basePrompt}
 
 ══════════════════════════════════════════════════════════════
 ${dynamicCatalogContext}
 ══════════════════════════════════════════════════════════════
 
-Données actuelles connues sur ce prospect:
-${JSON.stringify(existingLeadData || {}, null, 2)}
+══════════════════════════════════════════════════════════════
+RÈGLE ABSOLUE ANTI-BLOCAGE ET CHANGEMENT DE SUJET (TOPIC SWITCH) :
+- Le dernier message envoyé par le prospect prévaut TOUJOURS sur les messages antérieurs ou les offres précédentes.
+- Si le prospect mentionne une nouvelle destination, un nouveau lieu ou exprime un souhait différent :
+  1. Bascule IMMÉDIATEMENT sur la nouvelle demande sans hésitation.
+  2. Abandonne et oublie immédiatement l'ancienne destination (écrase impérativement "recommended_offer" avec la nouvelle offre).
+  3. Ne fais JAMAIS référence à l'ancien sujet et ne mélange jamais deux offres divergentes dans ta réponse, sauf si le client le redemande explicitement.
+══════════════════════════════════════════════════════════════
+
+Données actuelles connues sur ce prospect (session en cours) :
+${JSON.stringify(sanitizedLeadData, null, 2)}
 
 INSTRUCTION CRUCIALE DE FORMAT DE SORTIE :
 Tu dois impérativement renvoyer UNIQUEMENT un objet JSON valide (sans aucun texte d'introduction ni de conclusion).
