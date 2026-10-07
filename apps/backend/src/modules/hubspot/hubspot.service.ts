@@ -81,36 +81,60 @@ export class HubSpotService {
         sorts: ['id'],
       });
 
-      const contactProperties: Record<string, string> = {
+      const standardProperties: Record<string, string> = {
         phone: lead.phone,
         lifecyclestage: this.getLifecycleStage(lead.conversationStage),
+      };
+
+      if (lead.firstName) standardProperties.firstname = lead.firstName;
+      if (lead.lastName) standardProperties.lastname = lead.lastName;
+      if (lead.email) standardProperties.email = lead.email;
+      if (lead.company) standardProperties.company = lead.company;
+
+      const contactProperties: Record<string, string> = {
+        ...standardProperties,
         ict_qualification_score: String(lead.qualificationScore),
       };
 
-      if (lead.firstName) contactProperties.firstname = lead.firstName;
-      if (lead.lastName) contactProperties.lastname = lead.lastName;
-      if (lead.email) contactProperties.email = lead.email;
-      if (lead.company) contactProperties.company = lead.company;
       if (lead.customerType) contactProperties.ict_customer_type = lead.customerType;
       if (lead.leadStatus) contactProperties.ict_lead_status = lead.leadStatus;
       if (lead.campaign) contactProperties.ict_source_campaign = lead.campaign;
       if (lead.source) contactProperties.hs_lead_source = lead.source;
 
       let contactId = lead.hubspotContactId;
+      const targetContactId = contactId || (searchResponse.results.length > 0 ? searchResponse.results[0].id : null);
 
-      if (searchResponse.results.length > 0) {
-        contactId = searchResponse.results[0].id;
-        await this.hubspotClient.crm.contacts.basicApi.update(contactId, {
-          properties: contactProperties,
-        });
-        console.log(`[HubSpot] Contact ${contactId} mis à jour.`);
-      } else {
-        const createdContact = await this.hubspotClient.crm.contacts.basicApi.create({
-          properties: contactProperties,
-          associations: [],
-        });
-        contactId = createdContact.id;
-        console.log(`[HubSpot] Nouveau contact ${contactId} créé.`);
+      const persistContact = async (props: Record<string, string>) => {
+        if (targetContactId) {
+          await this.hubspotClient!.crm.contacts.basicApi.update(targetContactId, {
+            properties: props,
+          });
+          return targetContactId;
+        } else {
+          const createdContact = await this.hubspotClient!.crm.contacts.basicApi.create({
+            properties: props,
+            associations: [],
+          });
+          return createdContact.id;
+        }
+      };
+
+      try {
+        contactId = await persistContact(contactProperties);
+        console.log(`[HubSpot] Contact ${contactId} synchronisé avec propriétés complètes.`);
+      } catch (propErr: any) {
+        const isMissingProperty =
+          propErr?.message?.includes('does not exist') ||
+          propErr?.body?.message?.includes('does not exist') ||
+          propErr?.body?.category === 'VALIDATION_ERROR';
+
+        if (isMissingProperty) {
+          console.warn('[HubSpot] Propriétés custom (ict_*) non trouvées dans HubSpot, synchronisation avec les propriétés standards...');
+          contactId = await persistContact(standardProperties);
+          console.log(`[HubSpot] Contact ${contactId} synchronisé (propriétés standards).`);
+        } else {
+          throw propErr;
+        }
       }
 
       // 2. Gestion de l'Objet Deal (si score >= 61 ou paiement/conseiller humain)
