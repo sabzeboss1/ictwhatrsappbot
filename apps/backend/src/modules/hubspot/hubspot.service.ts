@@ -62,24 +62,41 @@ export class HubSpotService {
     }
 
     try {
-      // 1. Rechercher contact existant par téléphone
-      const searchResponse = await this.hubspotClient.crm.contacts.searchApi.doSearch({
-        filterGroups: [
-          {
-            filters: [
-              {
-                propertyName: 'phone',
-                operator: 'EQ' as any,
-                value: lead.phone,
-              },
-            ],
-          },
-        ],
-        properties: ['phone', 'email', 'firstname', 'lastname'],
-        limit: 1,
-        after: undefined,
-        sorts: ['id'],
-      });
+      // 1. Rechercher contact existant par téléphone OU email
+      const filterGroups: any[] = [];
+      if (lead.phone) {
+        filterGroups.push({
+          filters: [
+            {
+              propertyName: 'phone',
+              operator: 'EQ' as any,
+              value: lead.phone,
+            },
+          ],
+        });
+      }
+      if (lead.email) {
+        filterGroups.push({
+          filters: [
+            {
+              propertyName: 'email',
+              operator: 'EQ' as any,
+              value: lead.email,
+            },
+          ],
+        });
+      }
+
+      let searchResponse = { results: [] as any[] };
+      if (filterGroups.length > 0) {
+        searchResponse = await this.hubspotClient.crm.contacts.searchApi.doSearch({
+          filterGroups,
+          properties: ['phone', 'email', 'firstname', 'lastname'],
+          limit: 1,
+          after: undefined,
+          sorts: ['id'],
+        });
+      }
 
       const standardProperties: Record<string, string> = {
         phone: lead.phone,
@@ -102,7 +119,7 @@ export class HubSpotService {
       if (lead.source) contactProperties.hs_lead_source = lead.source;
 
       let contactId = lead.hubspotContactId;
-      const targetContactId = contactId || (searchResponse.results.length > 0 ? searchResponse.results[0].id : null);
+      let targetContactId = contactId || (searchResponse.results.length > 0 ? searchResponse.results[0].id : null);
 
       const persistContact = async (props: Record<string, string>) => {
         if (targetContactId) {
@@ -111,11 +128,29 @@ export class HubSpotService {
           });
           return targetContactId;
         } else {
-          const createdContact = await this.hubspotClient!.crm.contacts.basicApi.create({
-            properties: props,
-            associations: [],
-          });
-          return createdContact.id;
+          try {
+            const createdContact = await this.hubspotClient!.crm.contacts.basicApi.create({
+              properties: props,
+              associations: [],
+            });
+            targetContactId = createdContact.id;
+            return createdContact.id;
+          } catch (createErr: any) {
+            // Gestion du conflit 409 : si le contact existe déjà (par email/doublon), récupérer l'ID existant et mettre à jour
+            const conflictMatch =
+              createErr?.body?.message?.match(/Existing ID:\s*(\d+)/i) ||
+              createErr?.message?.match(/Existing ID:\s*(\d+)/i);
+
+            if (conflictMatch && conflictMatch[1]) {
+              targetContactId = conflictMatch[1];
+              console.log(`[HubSpot] Contact existant détecté via conflit 409 (ID: ${targetContactId}). Mise à jour en cours...`);
+              await this.hubspotClient!.crm.contacts.basicApi.update(targetContactId, {
+                properties: props,
+              });
+              return targetContactId;
+            }
+            throw createErr;
+          }
         }
       };
 
@@ -177,7 +212,7 @@ export class HubSpotService {
         },
       });
 
-      return { success: true, contactId, dealId: dealId || undefined };
+      return { success: true, contactId: contactId || undefined, dealId: dealId || undefined };
     } catch (err: any) {
       const errorMsg = err.message || 'Erreur HubSpot inconnue';
       console.error(`[HubSpot] Échec de synchronisation pour le lead ${lead.id}:`, errorMsg);
