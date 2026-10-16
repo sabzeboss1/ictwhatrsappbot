@@ -111,6 +111,10 @@ export class LeadsService {
       assignedAgentId?: string | null;
       conversationStage?: string;
       aiDisabled?: boolean;
+      realPhone?: string | null;
+      firstName?: string | null;
+      lastName?: string | null;
+      email?: string | null;
     },
     actorId?: string
   ) {
@@ -135,6 +139,20 @@ export class LeadsService {
     });
 
     emitLeadUpdated(updated);
+
+    // Synchronisation automatique HubSpot si les coordonnées ou le statut changent
+    if (
+      data.realPhone !== undefined ||
+      data.email !== undefined ||
+      data.firstName !== undefined ||
+      data.lastName !== undefined ||
+      data.leadStatus !== undefined
+    ) {
+      this.resyncHubspot(id, actorId).catch((err) =>
+        console.warn(`[LeadsService] Échec synchronisation HubSpot asynchrone pour ${id}:`, err.message)
+      );
+    }
+
     return updated;
   }
 

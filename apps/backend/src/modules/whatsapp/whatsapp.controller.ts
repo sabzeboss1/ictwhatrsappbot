@@ -42,11 +42,18 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           return;
         }
 
+        // Traitement de la synchronisation des contacts (résolution automatique LID ↔ Numéro)
+        if (normalizedEvent === 'contacts.upsert' || normalizedEvent === 'contacts.update') {
+          console.log(`[Webhook] Synchronisation contacts reçue (${rawEventType})`);
+          await whatsAppService.handleContactsUpdate(body.data || body);
+          return;
+        }
+
         // Ignorer les événements qui ne sont pas des messages entrants
         const ignoredEvents = [
           'qrcode.updated', 'messages.update', 'messages.delete',
           'presence.update', 'chats.update', 'chats.upsert', 'chats.delete',
-          'contacts.update', 'contacts.upsert', 'groups.update', 'groups.upsert',
+          'groups.update', 'groups.upsert',
           'call', 'status.instance', 'labels.edit', 'labels.association',
           'typebot.start', 'typebot.change', 'send.message',
         ];

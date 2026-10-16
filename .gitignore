@@ -46,3 +46,7 @@ lerna-debug.log*
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# WordPress Plugins (local / standalone)
+wordpress-hubspot-plugin/
+*.zip

@@ -20,10 +20,14 @@ import {
   X,
   FileText,
   ChevronDown,
+  Lock,
+  Edit2,
+  Check,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import { useAuth } from '../lib/auth-context';
+import { getLeadDisplayName, isLidAccount, getLeadPhoneDisplay } from '../lib/lead-utils';
 
 export const Conversations: React.FC = () => {
   const queryClient = useQueryClient();
@@ -37,6 +41,9 @@ export const Conversations: React.FC = () => {
   const [mobileShowChat, setMobileShowChat] = useState(false);
   const [sendingCatalog, setSendingCatalog] = useState(false);
   const [showCatalogDropdown, setShowCatalogDropdown] = useState(false);
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -185,10 +192,34 @@ export const Conversations: React.FC = () => {
     }
   };
 
+  // Mettre à jour manuellement le numéro de téléphone réel
+  const handleSavePhone = async () => {
+    if (!currentLead) return;
+    setSavingPhone(true);
+    try {
+      const res = await api.patch(`/api/leads/${currentLead.id}`, { realPhone: newPhone.trim() });
+      queryClient.setQueryData(['lead', currentLead.id], (prev: any) => ({ ...prev, ...res.data }));
+      queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      queryClient.invalidateQueries({ queryKey: ['lead', currentLead.id] });
+      setEditingPhone(false);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Erreur lors de la mise à jour du numéro');
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
   const filteredConversations = (conversations || []).filter((c: any) => {
     const q = search.toLowerCase();
     const name = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
-    return name.includes(q) || c.phone.includes(q) || (c.company || '').toLowerCase().includes(q);
+    return (
+      name.includes(q) ||
+      (c.phone || '').toLowerCase().includes(q) ||
+      (c.realPhone || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q) ||
+      (c.company || '').toLowerCase().includes(q) ||
+      (c.recommendedOffer || '').toLowerCase().includes(q)
+    );
   });
 
   const getStatusBadge = (status: string) => {
@@ -236,7 +267,8 @@ export const Conversations: React.FC = () => {
             filteredConversations.map((c: any) => {
               const isSelected = c.id === selectedLeadId;
               const lastMsg = c.messages?.[0];
-              const displayName = c.firstName ? `${c.firstName} ${c.lastName || ''}` : c.phone;
+              const displayName = getLeadDisplayName(c);
+              const phoneInfo = getLeadPhoneDisplay(c);
 
               return (
                 <button
@@ -264,7 +296,14 @@ export const Conversations: React.FC = () => {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs font-bold text-white truncate">{displayName}</p>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <p className="text-xs font-bold text-white truncate">{displayName}</p>
+                        {phoneInfo.isLid && (
+                          <span className="shrink-0 inline-flex items-center gap-0.5 text-[9px] text-amber-400 bg-amber-500/10 px-1 py-0.2 rounded border border-amber-500/20" title="Numéro masqué par WhatsApp">
+                            <Lock className="w-2.5 h-2.5" />
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[10px] text-slate-500 shrink-0 ml-1">
                         {lastMsg ? new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                       </span>
@@ -277,19 +316,30 @@ export const Conversations: React.FC = () => {
                       {getStatusBadge(c.leadStatus)}
                     </div>
 
-                    <div className="flex items-center gap-2 mt-2">
-                      <span className="text-[10px] text-slate-400 font-medium">
-                        Score: <strong className="text-emerald-400">{c.qualificationScore}</strong>/100
-                      </span>
-                      {c.aiDisabled ? (
-                        <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.2 rounded font-semibold">
-                          Humain actif
+                    <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-800/40 text-[10px]">
+                      <div className="truncate font-mono">
+                        {phoneInfo.hasRealPhone ? (
+                          <span className="text-emerald-400 font-medium">{phoneInfo.text}</span>
+                        ) : phoneInfo.isLid ? (
+                          <span className="text-amber-400/80">WhatsApp (ID masqué)</span>
+                        ) : (
+                          <span className="text-slate-400">{phoneInfo.text}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                        <span className="text-slate-400">
+                          Score: <strong className="text-emerald-400">{c.qualificationScore}</strong>
                         </span>
-                      ) : (
-                        <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.2 rounded font-semibold flex items-center gap-1">
-                          <Bot className="w-2.5 h-2.5" /> IA active
-                        </span>
-                      )}
+                        {c.aiDisabled ? (
+                          <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1 rounded">
+                            Humain
+                          </span>
+                        ) : (
+                          <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded flex items-center gap-0.5">
+                            <Bot className="w-2 h-2" /> IA
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </button>
@@ -320,13 +370,13 @@ export const Conversations: React.FC = () => {
                 </button>
 
                 <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-emerald-400 text-xs sm:text-sm shrink-0">
-                  {(currentLead.firstName || currentLead.phone).substring(0, 2).toUpperCase()}
+                  {getLeadDisplayName(currentLead).substring(0, 2).toUpperCase()}
                 </div>
 
                 <div className="min-w-0 truncate">
                   <div className="flex items-center gap-2">
                     <h2 className="text-xs sm:text-sm font-bold text-white truncate">
-                      {currentLead.firstName ? `${currentLead.firstName} ${currentLead.lastName || ''}` : currentLead.phone}
+                      {getLeadDisplayName(currentLead)}
                     </h2>
                     {currentLead.company && (
                       <span className="hidden sm:inline text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700 truncate">
@@ -334,9 +384,30 @@ export const Conversations: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <p className="text-[10px] sm:text-[11px] text-slate-400 truncate">
-                    {currentLead.phone} • {currentLead.source}
-                  </p>
+                  <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] text-slate-400 truncate mt-0.5">
+                    {currentLead.realPhone ? (
+                      <span className="text-emerald-400 font-mono font-medium">{currentLead.realPhone}</span>
+                    ) : isLidAccount(currentLead) ? (
+                      <span className="inline-flex items-center gap-1 text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 font-medium">
+                        <Lock className="w-2.5 h-2.5" /> WhatsApp (Numéro masqué)
+                      </span>
+                    ) : (
+                      <span className="font-mono">{currentLead.phone}</span>
+                    )}
+                    <span>• {currentLead.source}</span>
+                    {isLidAccount(currentLead) && !editingPhone && (
+                      <button
+                        onClick={() => {
+                          setEditingPhone(true);
+                          setNewPhone('');
+                          setShowDetailPanel(true);
+                        }}
+                        className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold underline ml-1 flex items-center gap-0.5"
+                      >
+                        <Edit2 className="w-2.5 h-2.5" /> Renseigner numéro
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -559,7 +630,7 @@ export const Conversations: React.FC = () => {
                 Fiche Qualification IA
               </span>
               <h3 className="text-base font-extrabold text-white mt-0.5">
-                {currentLead.firstName ? `${currentLead.firstName} ${currentLead.lastName || ''}` : currentLead.phone}
+                {getLeadDisplayName(currentLead)}
               </h3>
               <p className="text-xs text-slate-400">{currentLead.customerType || 'Particulier'}</p>
             </div>
@@ -569,6 +640,86 @@ export const Conversations: React.FC = () => {
             >
               <X className="w-5 h-5" />
             </button>
+          </div>
+
+          {/* Coordonnées & Téléphone */}
+          <div className="bg-slate-900/60 p-3.5 rounded-xl border border-slate-800 space-y-2.5 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coordonnées</span>
+              {!editingPhone && (
+                <button
+                  onClick={() => {
+                    setEditingPhone(true);
+                    setNewPhone(currentLead.realPhone || '');
+                  }}
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
+                >
+                  <Edit2 className="w-3 h-3" /> {currentLead.realPhone ? 'Modifier' : 'Ajouter numéro'}
+                </button>
+              )}
+            </div>
+
+            {editingPhone ? (
+              <div className="space-y-2 pt-1">
+                <label className="text-[10px] text-slate-400 block font-medium">Numéro de téléphone réel :</label>
+                <input
+                  type="text"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  placeholder="+237 6XX XX XX XX"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+                  autoFocus
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleSavePhone}
+                    disabled={savingPhone || !newPhone.trim()}
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg py-1.5 text-xs font-bold transition-all disabled:opacity-50"
+                  >
+                    {savingPhone ? 'Enregistrement...' : 'Enregistrer & Sync HubSpot'}
+                  </button>
+                  <button
+                    onClick={() => setEditingPhone(false)}
+                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-start gap-2">
+                  <Phone className="w-3.5 h-3.5 text-slate-400 mt-0.5 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="text-[10px] text-slate-500 block">Téléphone</span>
+                    {currentLead.realPhone ? (
+                      <span className="text-emerald-400 font-mono font-bold">{currentLead.realPhone}</span>
+                    ) : isLidAccount(currentLead) ? (
+                      <div>
+                        <div className="inline-flex items-center gap-1 text-[11px] text-amber-400 font-semibold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                          <Lock className="w-3 h-3" /> Numéro masqué (WhatsApp LID)
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1 leading-tight">
+                          Le numéro réel n'est pas transmis par WhatsApp. Vous pouvez le saisir ici dès que le client vous le communique.
+                        </p>
+                        <div className="text-[9px] text-slate-500 font-mono mt-0.5 truncate">
+                          ID: {currentLead.phone}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-slate-200 font-mono">{currentLead.phone}</span>
+                    )}
+                  </div>
+                </div>
+
+                {currentLead.email && (
+                  <div className="flex items-start gap-2 pt-1.5 border-t border-slate-800/60">
+                    <span className="text-[10px] text-slate-500 block w-12 shrink-0">Email</span>
+                    <span className="text-slate-200 font-medium truncate">{currentLead.email}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Jauge de score */}
@@ -595,7 +746,7 @@ export const Conversations: React.FC = () => {
 
           {/* Données extraites */}
           <div className="space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Données extraites</h4>
+            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Données extraites par l'IA</h4>
 
             <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-800 space-y-2 text-xs">
               <div className="flex items-start gap-2">
@@ -614,11 +765,31 @@ export const Conversations: React.FC = () => {
                 </div>
               </div>
 
+              {currentLead.budget && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[11px] text-emerald-400 font-bold mt-0.5">💰</span>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">Budget estimé</span>
+                    <span className="text-emerald-400 font-semibold">{currentLead.budget}</span>
+                  </div>
+                </div>
+              )}
+
+              {currentLead.need && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[11px] text-cyan-400 font-bold mt-0.5">🎯</span>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">Besoin exprimé</span>
+                    <span className="text-slate-200">{currentLead.need}</span>
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-start gap-2">
                 <Briefcase className="w-3.5 h-3.5 text-slate-400 mt-0.5" />
                 <div>
                   <span className="text-[10px] text-slate-500 block">Offre recommandée</span>
-                  <span className="text-slate-200">{currentLead.recommendedOffer || 'En cours'}</span>
+                  <span className="text-slate-200 font-semibold text-emerald-300">{currentLead.recommendedOffer || 'En cours'}</span>
                 </div>
               </div>
             </div>

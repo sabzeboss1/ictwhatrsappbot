@@ -14,8 +14,10 @@ import {
   Flame,
   CheckCircle2,
   Calendar,
+  Lock,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { getLeadDisplayName, isLidAccount, getLeadPhoneDisplay } from '../lib/lead-utils';
 
 export const Leads: React.FC = () => {
   const queryClient = useQueryClient();
@@ -161,10 +163,23 @@ export const Leads: React.FC = () => {
                     className="hover:bg-slate-800/40 cursor-pointer transition-colors"
                   >
                     <td className="py-3.5 px-4">
-                      <div className="font-bold text-white">
-                        {lead.firstName ? `${lead.firstName} ${lead.lastName || ''}` : lead.phone}
+                      <div className="font-bold text-white flex items-center gap-1.5">
+                        <span>{getLeadDisplayName(lead)}</span>
+                        {isLidAccount(lead) && (
+                          <span className="inline-flex items-center gap-0.5 text-[9px] text-amber-400 bg-amber-500/10 px-1 py-0.2 rounded border border-amber-500/20" title="Numéro masqué par WhatsApp (LID)">
+                            <Lock className="w-2.5 h-2.5" />
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[11px] text-slate-400">{lead.phone}</div>
+                      <div className="text-[11px] text-slate-400">
+                        {lead.realPhone ? (
+                          <span className="text-emerald-400 font-mono font-medium">{lead.realPhone}</span>
+                        ) : isLidAccount(lead) ? (
+                          <span className="text-amber-400/90 font-medium">WhatsApp (ID masqué)</span>
+                        ) : (
+                          <span className="font-mono">{lead.phone}</span>
+                        )}
+                      </div>
                       {lead.company && <div className="text-[10px] text-amber-400 font-semibold">{lead.company}</div>}
                     </td>
 
@@ -259,7 +274,7 @@ export const Leads: React.FC = () => {
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">Aperçu rapide</span>
               <h2 className="text-base font-extrabold text-white mt-0.5">
-                {selectedLead.firstName ? `${selectedLead.firstName} ${selectedLead.lastName || ''}` : selectedLead.phone}
+                {getLeadDisplayName(selectedLead)}
               </h2>
             </div>
             <button onClick={() => setSelectedLead(null)} className="text-slate-400 hover:text-white p-1">

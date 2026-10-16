@@ -4,6 +4,7 @@ import { env } from '../../config/env.js';
 import { agentService } from '../agent/agent.service.js';
 import { computeScore } from '../scoring/scoring.service.js';
 import { enqueueHubspotSync } from '../../queues/message.queue.js';
+import { isValidPhoneNumber } from '../hubspot/hubspot.service.js';
 import { emitLeadAlert, emitLeadUpdated, emitNewMessage } from '../../plugins/socketio.js';
 import { catalogService } from '../catalog/catalog.service.js';
 
@@ -47,6 +48,27 @@ export class WhatsAppService {
   }
 
   /**
+   * Tente d'extraire un numéro de téléphone réel (Cameroun ou International) depuis un texte.
+   */
+  public extractPhoneNumberFromText(text: string): string | null {
+    if (!text) return null;
+    // Format camerounais : 6XXXXXXXX ou 2376XXXXXXXX ou +2376XXXXXXXX
+    const cameroonMatch = text.match(/(?:\+?237\s*)?([6][5-9]\d{7})\b/);
+    if (cameroonMatch && cameroonMatch[1]) {
+      return `+237${cameroonMatch[1]}`;
+    }
+    // Format international E.164 (+33..., etc.)
+    const intlMatch = text.match(/\+(?:[1-9]\d{0,2})[\s.-]?\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{2,4}/);
+    if (intlMatch) {
+      const digits = intlMatch[0].replace(/\D/g, '');
+      if (digits.length >= 8 && digits.length <= 15) {
+        return `+${digits}`;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Résout un LID (Linked ID) vers un vrai numéro de téléphone via l'API Evolution.
    * Utilise un cache en mémoire pour éviter les appels répétés.
    * 
@@ -81,31 +103,30 @@ export class WhatsAppService {
       }
     }
 
-    // 3. Tenter via l'API Evolution findContacts
+    // 3. Tenter via l'API Evolution findContacts avec remoteJid
     try {
       const res = await axios.post(
         `${env.EVOLUTION_API_URL}/chat/findContacts/${env.EVOLUTION_INSTANCE_NAME}`,
-        { where: { id: lid } },
+        { where: { remoteJid: lid } },
         {
           headers: {
             apikey: env.EVOLUTION_API_KEY,
             'Content-Type': 'application/json',
           },
-          timeout: 5000,
+          timeout: 4000,
         }
       );
 
       const contacts = res.data;
       if (Array.isArray(contacts) && contacts.length > 0) {
         const contact = contacts[0];
-        // Ne JAMAIS utiliser contact.id s'il ne contient pas @s.whatsapp.net (sinon c'est un UUID/CUID de base)
         const candidateNumber = contact.number || (contact.id?.includes('@s.whatsapp.net') ? contact.id.split('@')[0] : null);
         if (candidateNumber) {
           const digits = candidateNumber.replace(/\D/g, '');
           if (this.isValidE164Digits(digits)) {
             const phone = this.normalizePhone(candidateNumber);
             this.lidCache.set(lid, phone);
-            console.log(`[LID Résolution] Via API Evolution findContacts: ${lid} → ${phone}`);
+            console.log(`[LID Résolution] Via API Evolution findContacts (remoteJid): ${lid} → ${phone}`);
             return phone;
           }
         }
@@ -114,7 +135,34 @@ export class WhatsAppService {
       console.warn(`[LID Résolution] API Evolution findContacts non disponible: ${err.message}`);
     }
 
-    // 4. Tenter via l'endpoint fetchProfile du contact
+    // 4. Tenter via l'API Evolution whatsappNumbers
+    try {
+      const res = await axios.post(
+        `${env.EVOLUTION_API_URL}/chat/whatsappNumbers/${env.EVOLUTION_INSTANCE_NAME}`,
+        { numbers: [lid] },
+        {
+          headers: {
+            apikey: env.EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          timeout: 4000,
+        }
+      );
+      if (Array.isArray(res.data) && res.data.length > 0) {
+        const item = res.data[0];
+        const candidate = item.jid || item.number;
+        if (candidate && candidate.includes('@s.whatsapp.net')) {
+          const phone = this.normalizePhone(candidate);
+          this.lidCache.set(lid, phone);
+          console.log(`[LID Résolution] Via whatsappNumbers: ${lid} → ${phone}`);
+          return phone;
+        }
+      }
+    } catch {
+      // Ignorer
+    }
+
+    // 5. Tenter via l'endpoint fetchProfile du contact
     try {
       const res = await axios.post(
         `${env.EVOLUTION_API_URL}/chat/fetchProfile/${env.EVOLUTION_INSTANCE_NAME}`,
@@ -124,7 +172,7 @@ export class WhatsAppService {
             apikey: env.EVOLUTION_API_KEY,
             'Content-Type': 'application/json',
           },
-          timeout: 5000,
+          timeout: 4000,
         }
       );
 
@@ -141,11 +189,56 @@ export class WhatsAppService {
       console.warn(`[LID Résolution] fetchProfile non disponible: ${err.message}`);
     }
 
-    // 5. Fallback CRUCIAL: GARDER LE JID LID TEL QUEL !
+    // 6. Fallback CRUCIAL: GARDER LE JID LID TEL QUEL !
     // Evolution API route parfaitement les messages directement vers l'identifiant LID.
     console.log(`[LID Résolution] Numéro téléphonique non exposé, utilisation du JID LID natif : ${lid}`);
     this.lidCache.set(lid, lid);
     return lid;
+  }
+
+  /**
+   * Traite les événements de mise à jour des contacts Evolution API (contacts.upsert / contacts.update)
+   * afin de détecter automatiquement la correspondance LID ↔ Vrai Numéro de Téléphone.
+   */
+  public async handleContactsUpdate(contactsData: any): Promise<void> {
+    try {
+      const contacts = Array.isArray(contactsData) ? contactsData : [contactsData];
+      for (const c of contacts) {
+        if (!c) continue;
+        const lid = c.lid || (c.remoteJid?.includes('@lid') ? c.remoteJid : null) || (c.id?.includes('@lid') ? c.id : null);
+        const phoneJid = c.id?.includes('@s.whatsapp.net') ? c.id : c.remoteJid?.includes('@s.whatsapp.net') ? c.remoteJid : null;
+        const candidateNumber = c.number || (phoneJid ? phoneJid.split('@')[0] : null);
+
+        if (lid && candidateNumber) {
+          const digits = candidateNumber.replace(/\D/g, '');
+          if (this.isValidE164Digits(digits)) {
+            const formattedPhone = this.normalizePhone(candidateNumber);
+            this.lidCache.set(lid, formattedPhone);
+            console.log(`[LID Contacts Sync] Correspondance établie: ${lid} → ${formattedPhone}`);
+
+            // Rechercher si un lead existe avec cet identifiant LID
+            const existingLead = await prisma.lead.findUnique({
+              where: { phone: lid },
+            });
+
+            if (existingLead && (!existingLead.realPhone || existingLead.realPhone !== formattedPhone)) {
+              console.log(`[LID Contacts Sync] Mise à jour du lead ${existingLead.id} avec le vrai numéro ${formattedPhone}`);
+              const updated = await prisma.lead.update({
+                where: { id: existingLead.id },
+                data: {
+                  realPhone: formattedPhone,
+                  whatsappLid: lid,
+                },
+              });
+              emitLeadUpdated(updated);
+              await enqueueHubspotSync({ leadId: updated.id });
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[LID Contacts Sync] Erreur lors du traitement contacts: ${err.message}`);
+    }
   }
 
   /**
@@ -250,9 +343,14 @@ export class WhatsAppService {
         lastName = parts.slice(1).join(' ');
       }
 
+      const isLid = phone.includes('@lid');
+      const detectedPhone = this.extractPhoneNumberFromText(text);
+
       lead = await prisma.lead.create({
         data: {
           phone,
+          realPhone: !isLid ? phone : detectedPhone,
+          whatsappLid: isLid ? phone : null,
           firstName,
           lastName,
           source,
@@ -263,15 +361,29 @@ export class WhatsAppService {
           interactionLevel: 'dialogue_actif',
         },
       });
-    } else if (source !== 'whatsapp' && lead.source === 'whatsapp') {
-      // Mettre à jour la source si le prospect provient d'une campagne spécifique
-      lead = await prisma.lead.update({
-        where: { id: lead.id },
-        data: {
-          source,
-          campaign: campaign || lead.campaign,
-        },
-      });
+    } else {
+      // Si le lead n'avait pas de vrai numéro et que l'utilisateur le fournit dans son message
+      const detectedPhone = this.extractPhoneNumberFromText(text);
+      if (detectedPhone && !lead.realPhone) {
+        console.log(`[WhatsApp] Numéro détecté dans le message entrant pour ${lead.id}: ${detectedPhone}`);
+        lead = await prisma.lead.update({
+          where: { id: lead.id },
+          data: { realPhone: detectedPhone },
+        });
+        emitLeadUpdated(lead);
+        await enqueueHubspotSync({ leadId: lead.id });
+      }
+
+      if (source !== 'whatsapp' && lead.source === 'whatsapp') {
+        // Mettre à jour la source si le prospect provient d'une campagne spécifique
+        lead = await prisma.lead.update({
+          where: { id: lead.id },
+          data: {
+            source,
+            campaign: campaign || lead.campaign,
+          },
+        });
+      }
     }
 
     // 3. Gestion du TTL d'inactivité de session (Anti-blocage / Context Reset)
@@ -483,6 +595,19 @@ export class WhatsAppService {
         ? lead.participantsCount
         : null;
 
+    // Détection d'un vrai numéro de téléphone (soit extrait par l'IA, soit par regex dans le texte)
+    let extractedPhone: string | null = null;
+    if (aiOutput.phone && !aiOutput.phone.includes('@lid')) {
+      const normalized = this.normalizePhone(aiOutput.phone);
+      if (isValidPhoneNumber(normalized)) {
+        extractedPhone = normalized;
+      }
+    }
+    if (!extractedPhone) {
+      extractedPhone = this.extractPhoneNumberFromText(inboundText);
+    }
+    const effectiveRealPhone = extractedPhone || lead.realPhone;
+
     // Mise à jour du Lead
     const updatedLead = await prisma.lead.update({
       where: { id: leadId },
@@ -510,6 +635,8 @@ export class WhatsAppService {
         firstName: aiOutput.first_name || lead.firstName,
         lastName: aiOutput.last_name || lead.lastName,
         email: aiOutput.email || lead.email,
+        realPhone: effectiveRealPhone,
+        whatsappLid: lead.phone.includes('@lid') ? lead.phone : lead.whatsappLid,
       },
     });
 

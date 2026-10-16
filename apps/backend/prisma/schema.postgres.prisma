@@ -10,6 +10,8 @@ datasource db {
 model Lead {
   id                    String    @id @default(cuid())
   phone                 String    @unique
+  realPhone             String?   // Vrai numéro de téléphone si le contact utilise un identifiant masqué (@lid)
+  whatsappLid           String?   // Identifiant LID WhatsApp natif (@lid)
   firstName             String?
   lastName              String?
   email                 String?

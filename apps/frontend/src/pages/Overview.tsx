@@ -23,6 +23,7 @@ import {
 } from 'recharts';
 import { api } from '../lib/api';
 import { getSocket } from '../lib/socket';
+import { getLeadDisplayName } from '../lib/lead-utils';
 
 export const Overview: React.FC = () => {
   const queryClient = useQueryClient();
@@ -232,7 +233,7 @@ export const Overview: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <div className="truncate">
                         <p className="text-xs font-bold text-slate-100 group-hover:text-emerald-400 transition-colors">
-                          {lead.firstName ? `${lead.firstName} ${lead.lastName || ''}` : lead.phone}
+                          {getLeadDisplayName(lead)}
                         </p>
                         <p className="text-[11px] text-slate-400 truncate mt-0.5">
                           {lead.company ? `${lead.company} • ` : ''}

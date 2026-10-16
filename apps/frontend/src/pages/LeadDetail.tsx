@@ -14,13 +14,20 @@ import {
   MessageSquare,
   ShieldCheck,
   Flame,
+  Phone,
+  Lock,
+  Edit2,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { getLeadDisplayName, isLidAccount, getLeadPhoneDisplay } from '../lib/lead-utils';
 
 export const LeadDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const [updating, setUpdating] = useState(false);
+  const [editingPhone, setEditingPhone] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
 
   const { data: lead, isLoading } = useQuery({
     queryKey: ['lead', id],
@@ -65,6 +72,21 @@ export const LeadDetail: React.FC = () => {
     }
   };
 
+  const handleSavePhone = async () => {
+    if (!id) return;
+    setSavingPhone(true);
+    try {
+      await api.patch(`/api/leads/${id}`, { realPhone: newPhone.trim() });
+      queryClient.invalidateQueries({ queryKey: ['lead', id] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      setEditingPhone(false);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Erreur lors de la mise à jour du numéro');
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
   if (isLoading) {
     return <div className="p-12 text-center text-slate-500 text-xs">Chargement du profil lead...</div>;
   }
@@ -88,12 +110,12 @@ export const LeadDetail: React.FC = () => {
       <div className="glass-panel p-6 rounded-2xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center font-extrabold text-white text-xl shadow-lg shadow-emerald-900/30">
-            {(lead.firstName || lead.phone).substring(0, 2).toUpperCase()}
+            {getLeadDisplayName(lead).substring(0, 2).toUpperCase()}
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-extrabold text-white">
-                {lead.firstName ? `${lead.firstName} ${lead.lastName || ''}` : lead.phone}
+                {getLeadDisplayName(lead)}
               </h1>
               {lead.isB2B && (
                 <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold px-2 py-0.5 rounded-full">
@@ -106,9 +128,56 @@ export const LeadDetail: React.FC = () => {
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {lead.phone} {lead.email ? `• ${lead.email}` : ''} {lead.company ? `• ${lead.company}` : ''}
-            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 mt-1">
+              {lead.realPhone ? (
+                <span className="text-emerald-400 font-mono font-medium">{lead.realPhone}</span>
+              ) : isLidAccount(lead) ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 font-medium">
+                  <Lock className="w-3 h-3" /> WhatsApp (Numéro masqué)
+                </span>
+              ) : (
+                <span className="font-mono">{lead.phone}</span>
+              )}
+              {lead.email ? `• ${lead.email}` : ''}
+              {lead.company ? `• ${lead.company}` : ''}
+              {!editingPhone && (
+                <button
+                  onClick={() => {
+                    setEditingPhone(true);
+                    setNewPhone(lead.realPhone || '');
+                  }}
+                  className="text-emerald-400 hover:text-emerald-300 font-semibold underline text-[11px] ml-1 flex items-center gap-0.5"
+                >
+                  <Edit2 className="w-2.5 h-2.5" /> {lead.realPhone ? 'Modifier tél.' : 'Renseigner tél.'}
+                </button>
+              )}
+            </div>
+
+            {editingPhone && (
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  type="text"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  placeholder="+237 6XX XX XX XX"
+                  className="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+                  autoFocus
+                />
+                <button
+                  onClick={handleSavePhone}
+                  disabled={savingPhone || !newPhone.trim()}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-2.5 py-1 rounded-lg font-bold transition-all disabled:opacity-50"
+                >
+                  {savingPhone ? 'Sauvegarde...' : 'Sauvegarder'}
+                </button>
+                <button
+                  onClick={() => setEditingPhone(false)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-2 py-1 rounded-lg"
+                >
+                  Annuler
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

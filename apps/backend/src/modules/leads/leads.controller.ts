@@ -29,12 +29,13 @@ export async function leadsRoutes(fastify: FastifyInstance) {
       return reply.send(lead);
     });
 
-    // Mise à jour d'un lead (statut, assignation, nextStep, bascule IA)
+    // Mise à jour d'un lead (statut, assignation, nextStep, bascule IA, coordonnées)
     protectedRoutes.patch('/api/leads/:id', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
-      const { leadStatus, nextStep, assignedAgentId, conversationStage, aiDisabled } = (request.body as any) || {};
+      const { leadStatus, nextStep, assignedAgentId, conversationStage, aiDisabled, realPhone, firstName, lastName, email } =
+        (request.body as any) || {};
       const updated = await leadsService.updateLead(
         request.params.id,
-        { leadStatus, nextStep, assignedAgentId, conversationStage, aiDisabled },
+        { leadStatus, nextStep, assignedAgentId, conversationStage, aiDisabled, realPhone, firstName, lastName, email },
         request.user?.userId
       );
       return reply.send(updated);
