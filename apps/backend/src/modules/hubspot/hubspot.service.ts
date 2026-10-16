@@ -145,6 +145,16 @@ export class HubSpotService {
       throw new Error(`Lead non trouvé: ${leadId}`);
     }
 
+    // Seuil minimum de qualification pour synchroniser vers HubSpot.
+    // Les contacts avec un score < 30 ne sont PAS envoyés à HubSpot (sauf s'ils y sont déjà).
+    // Cela évite d'encombrer le CRM avec des contacts non qualifiés (ex: juste "bonjour").
+    const HUBSPOT_MIN_SCORE = 30;
+    const alreadySynced = Boolean(lead.hubspotContactId);
+    if (lead.qualificationScore < HUBSPOT_MIN_SCORE && !alreadySynced) {
+      console.log(`[HubSpot] Lead ${lead.id} ignoré (score ${lead.qualificationScore} < ${HUBSPOT_MIN_SCORE}, pas encore dans HubSpot)`);
+      return { success: true }; // Pas d'erreur, juste pas encore qualifié
+    }
+
     const effectivePhone = getEffectivePhoneNumber(lead);
     const aiSummary = this.buildAiSummaryText(lead);
 
