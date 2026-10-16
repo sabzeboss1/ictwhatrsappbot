@@ -337,6 +337,7 @@ export class AgentService {
     const dynamicCatalogContext = catalogService.generatePromptContext(campaignSlug);
 
     // Extraction épurée des données pertinentes du lead (sans métadonnées internes)
+    const isLidAccount = existingLeadData?.phone?.includes('@lid') && !existingLeadData?.realPhone;
     const sanitizedLeadData = existingLeadData
       ? {
           firstName: existingLeadData.firstName || undefined,
@@ -349,6 +350,8 @@ export class AgentService {
           preferredDate: existingLeadData.preferredDate || undefined,
           participantsCount: existingLeadData.participantsCount || undefined,
           budget: existingLeadData.budget || undefined,
+          isLidAccount: isLidAccount || undefined,
+          realPhone: existingLeadData.realPhone || undefined,
         }
       : {};
 
@@ -397,6 +400,7 @@ Structure JSON exacte requise :
   "first_name": null,
   "last_name": null,
   "email": null,
+  "phone": null,
   "send_catalog": false,
   "catalog_id": "ict-general-2026",
   "catalog_type": "general"
@@ -787,6 +791,7 @@ Structure JSON exacte requise :
       first_name: null,
       last_name: null,
       email: null,
+      phone: null,
       send_catalog,
       catalog_type,
       catalog_id,

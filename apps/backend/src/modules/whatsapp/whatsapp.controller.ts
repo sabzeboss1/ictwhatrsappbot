@@ -85,17 +85,32 @@ export async function whatsappRoutes(fastify: FastifyInstance) {
           // LOG : données clés extraites
           console.log(`[Webhook] Extraction: remoteJid="${rawPhone}", fromMe=${fromMe}, msgId="${whatsappMessageId}", pushName="${data.pushName || 'N/A'}"`);
 
-          // RÉSOLUTION LID améliorée
+          // RÉSOLUTION LID améliorée (5 sources de résolution par ordre de fiabilité)
           if (rawPhone.includes('@lid')) {
             console.log(`[Webhook] LID détecté: ${rawPhone}`);
-            const participantHint = key.participant || data.participant || data.sender;
-            if (participantHint && participantHint.includes('@s.whatsapp.net')) {
-              rawPhone = participantHint;
-              console.log(`[Webhook] LID résolu via participant hint: ${rawPhone}`);
-            } else {
-              const resolvedPhone = await whatsAppService.resolveLidToPhone(rawPhone, participantHint);
-              rawPhone = resolvedPhone;
-              console.log(`[Webhook] LID résolu: ${rawPhone}`);
+            // LOG DIAGNOSTIC COMPLET pour identifier les champs disponibles avec cette version d'Evolution API
+            console.log(`[Webhook] LID DIAGNOSTIC — key:`, JSON.stringify(key));
+            console.log(`[Webhook] LID DIAGNOSTIC — data.senderPn: ${data.senderPn || 'N/A'}, data.participant: ${data.participant || 'N/A'}, data.sender: ${data.sender || 'N/A'}, data.messageTimestamp: ${data.messageTimestamp || 'N/A'}`);
+
+            // Source 1 : senderPn — champ ajouté par certaines versions d'Evolution API v2 / Baileys
+            // Contient le vrai numéro de téléphone au format international (ex: "237699112233")
+            const senderPn = key.senderPn || data.senderPn || data.verifiedBizName;
+            if (senderPn && !senderPn.includes('@lid') && /^\d{8,15}$/.test(senderPn.replace(/\D/g, ''))) {
+              rawPhone = senderPn.includes('@') ? senderPn : `${senderPn.replace(/\D/g, '')}@s.whatsapp.net`;
+              console.log(`[Webhook] LID résolu via senderPn: ${rawPhone}`);
+            }
+            // Source 2 : participant hint (disponible dans les groupes ou parfois en 1-à-1)
+            else {
+              const participantHint = key.participant || data.participant || data.sender;
+              if (participantHint && participantHint.includes('@s.whatsapp.net')) {
+                rawPhone = participantHint;
+                console.log(`[Webhook] LID résolu via participant hint: ${rawPhone}`);
+              } else {
+                // Source 3-6 : résolution asynchrone via API Evolution (cache, findContacts, whatsappNumbers, fetchProfile)
+                const resolvedPhone = await whatsAppService.resolveLidToPhone(rawPhone, participantHint);
+                rawPhone = resolvedPhone;
+                console.log(`[Webhook] LID résolu: ${rawPhone}`);
+              }
             }
           }
 
