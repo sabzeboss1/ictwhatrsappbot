@@ -20,6 +20,50 @@ export function getEffectivePhoneNumber(lead: { realPhone?: string | null; phone
   return null;
 }
 
+export function extractRejectedProperties(err: any): string[] {
+  const rejected = new Set<string>();
+
+  const checkData = (data: any) => {
+    if (!data) return;
+    if (Array.isArray(data.errors)) {
+      for (const e of data.errors) {
+        if (e.context?.propertyName && Array.isArray(e.context.propertyName)) {
+          e.context.propertyName.forEach((p: string) => rejected.add(p));
+        } else if (e.name) {
+          rejected.add(e.name);
+        }
+      }
+    }
+  };
+
+  if (err?.body) {
+    if (typeof err.body === 'object') checkData(err.body);
+    else if (typeof err.body === 'string') {
+      try {
+        checkData(JSON.parse(err.body));
+      } catch {}
+    }
+  }
+
+  if (err?.response?.body) {
+    if (typeof err.response.body === 'object') checkData(err.response.body);
+    else if (typeof err.response.body === 'string') {
+      try {
+        checkData(JSON.parse(err.response.body));
+      } catch {}
+    }
+  }
+
+  const raw = `${err?.message || ''} ${JSON.stringify(err || {})}`;
+  const regexMatches = raw.matchAll(/"name":\s*"([^"]+)"|"propertyName":\s*\["([^"]+)"\]/g);
+  for (const m of regexMatches) {
+    const prop = m[1] || m[2];
+    if (prop) rejected.add(prop);
+  }
+
+  return Array.from(rejected);
+}
+
 export class HubSpotService {
   private hubspotClient: Client | null = null;
 
@@ -45,6 +89,55 @@ export class HubSpotService {
       default:
         return 'lead';
     }
+  }
+
+  /**
+   * Mappe les statuts de qualification francophones internes vers les options
+   * standard de la propriété `hs_lead_status` de HubSpot :
+   * [NEW, OPEN, IN_PROGRESS, OPEN_DEAL, UNQUALIFIED, ATTEMPTED_TO_CONTACT, CONNECTED, BAD_TIMING]
+   */
+  public mapToHubSpotLeadStatus(leadStatus?: string | null): string | undefined {
+    if (!leadStatus) return undefined;
+
+    const validHubSpotStatuses = [
+      'NEW',
+      'OPEN',
+      'IN_PROGRESS',
+      'OPEN_DEAL',
+      'UNQUALIFIED',
+      'ATTEMPTED_TO_CONTACT',
+      'CONNECTED',
+      'BAD_TIMING',
+    ];
+
+    const upper = leadStatus.trim().toUpperCase();
+    if (validHubSpotStatuses.includes(upper)) {
+      return upper;
+    }
+
+    const normalized = leadStatus
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    if (normalized.includes('nouveau') || normalized === 'new') {
+      return 'NEW';
+    }
+    if (normalized.includes('chaude') || normalized.includes('opportunite') || normalized.includes('deal')) {
+      return 'OPEN_DEAL';
+    }
+    if (normalized.includes('qualifie') || normalized.includes('connected')) {
+      return 'IN_PROGRESS';
+    }
+    if (normalized.includes('tiede') || normalized.includes('en cours') || normalized.includes('open')) {
+      return 'OPEN';
+    }
+    if (normalized.includes('froid') || normalized.includes('unqualified') || normalized.includes('disqualif')) {
+      return 'UNQUALIFIED';
+    }
+
+    return 'OPEN';
   }
 
   /**
@@ -132,7 +225,7 @@ export class HubSpotService {
       });
       console.log(`[HubSpot] Note d'activité IA créée pour le contact ${contactId}`);
     } catch (noteErr: any) {
-      console.warn(`[HubSpot] Note non créée (le champ description reste à jour): ${noteErr?.message || noteErr}`);
+      console.warn(`[HubSpot] Note non créée: ${noteErr?.message || noteErr}`);
     }
   }
 
@@ -219,9 +312,10 @@ export class HubSpotService {
       }
 
       // Propriétés standard HubSpot (toujours acceptées par HubSpot)
+      // Note: "description" n'existe pas sur l'objet Contact dans HubSpot (il existe sur Deal).
+      // Le résumé IA est transmis dans "message" et via la Note d'activité timeline (createHubSpotNote).
       const standardProperties: Record<string, string> = {
         lifecyclestage: this.getLifecycleStage(lead.conversationStage),
-        description: aiSummary,
         message: aiSummary,
       };
 
@@ -239,7 +333,11 @@ export class HubSpotService {
       if (lead.lastName) standardProperties.lastname = lead.lastName;
       if (lead.email) standardProperties.email = lead.email;
       if (lead.company) standardProperties.company = lead.company;
-      if (lead.leadStatus) standardProperties.hs_lead_status = lead.leadStatus;
+
+      const mappedLeadStatus = this.mapToHubSpotLeadStatus(lead.leadStatus);
+      if (mappedLeadStatus) {
+        standardProperties.hs_lead_status = mappedLeadStatus;
+      }
 
       // Propriétés personnalisées optionnelles (si créées dans le portail HubSpot)
       const contactProperties: Record<string, string> = {
@@ -292,21 +390,42 @@ export class HubSpotService {
         }
       };
 
+      const currentProps = { ...contactProperties };
+
       try {
-        contactId = await persistContact(contactProperties);
+        contactId = await persistContact(currentProps);
         console.log(`[HubSpot] Contact ${contactId} synchronisé avec propriétés complètes.`);
       } catch (propErr: any) {
-        const isMissingProperty =
-          propErr?.message?.includes('does not exist') ||
-          propErr?.body?.message?.includes('does not exist') ||
-          propErr?.body?.category === 'VALIDATION_ERROR';
+        console.warn(`[HubSpot] Propriétés rejetées ou erreur lors du premier envoi:`, propErr?.message || propErr);
 
-        if (isMissingProperty) {
-          console.warn('[HubSpot] Propriétés custom (ict_*) non trouvées dans HubSpot, synchronisation avec les propriétés standards...');
-          contactId = await persistContact(standardProperties);
-          console.log(`[HubSpot] Contact ${contactId} synchronisé (propriétés standards avec suivi IA complet).`);
+        const rejectedProps = extractRejectedProperties(propErr);
+        if (rejectedProps.length > 0) {
+          console.warn(`[HubSpot] Propriétés rejetées par HubSpot: ${rejectedProps.join(', ')}. Nettoyage et nouvel essai...`);
+          for (const prop of rejectedProps) {
+            delete currentProps[prop];
+          }
+
+          try {
+            contactId = await persistContact(currentProps);
+            console.log(`[HubSpot] Contact ${contactId} synchronisé après retrait des propriétés rejetées.`);
+          } catch (retryErr: any) {
+            console.warn(`[HubSpot] Échec après nettoyage des propriétés rejetées. Repli sur le profil standard...`);
+            contactId = await persistContact(standardProperties);
+            console.log(`[HubSpot] Contact ${contactId} synchronisé avec propriétés standards.`);
+          }
         } else {
-          throw propErr;
+          const isValidationError =
+            propErr?.message?.includes('does not exist') ||
+            propErr?.message?.includes('VALIDATION_ERROR') ||
+            propErr?.body?.category === 'VALIDATION_ERROR';
+
+          if (isValidationError) {
+            console.warn('[HubSpot] Erreur de validation générale, repli sur propriétés standards...');
+            contactId = await persistContact(standardProperties);
+            console.log(`[HubSpot] Contact ${contactId} synchronisé (propriétés standards).`);
+          } else {
+            throw propErr;
+          }
         }
       }
 
@@ -320,40 +439,45 @@ export class HubSpotService {
       const shouldCreateDeal = lead.qualificationScore >= 61 || lead.nextStep === 'Paiement' || lead.nextStep === 'Conseiller humain';
 
       if (shouldCreateDeal && !dealId && contactId) {
-        const contactLabel = [lead.firstName, lead.lastName].filter(Boolean).join(' ') || effectivePhone || 'Prospect';
-        const dealName = `Prospect ${contactLabel} - ${lead.recommendedOffer || 'Tour ICT'}`.trim();
-        const dealStage = lead.nextStep === 'Paiement' ? 'qualifiedtobuy' : 'appointmentscheduled';
+        try {
+          const contactLabel = [lead.firstName, lead.lastName].filter(Boolean).join(' ') || effectivePhone || 'Prospect';
+          const dealName = `Prospect ${contactLabel} - ${lead.recommendedOffer || 'Tour ICT'}`.trim();
+          const dealStage = lead.nextStep === 'Paiement' ? 'qualifiedtobuy' : 'appointmentscheduled';
 
-        const dealProperties: Record<string, string> = {
-          dealname: dealName,
-          dealstage: dealStage,
-          pipeline: env.HUBSPOT_PIPELINE_ID,
-          description: aiSummary,
-        };
+          const dealProperties: Record<string, string> = {
+            dealname: dealName,
+            dealstage: dealStage,
+            pipeline: env.HUBSPOT_PIPELINE_ID || 'default',
+            description: aiSummary,
+          };
 
-        if (lead.budget) {
-          const numericAmount = lead.budget.replace(/[^\d]/g, '');
-          if (numericAmount && Number(numericAmount) > 0) {
-            dealProperties.amount = numericAmount;
+          if (lead.budget) {
+            const numericAmount = lead.budget.replace(/[^\d]/g, '');
+            if (numericAmount && Number(numericAmount) > 0) {
+              dealProperties.amount = numericAmount;
+            }
           }
-        }
 
-        const createdDeal = await this.hubspotClient.crm.deals.basicApi.create({
-          properties: dealProperties,
-          associations: [
-            {
-              to: { id: contactId },
-              types: [
-                {
-                  associationCategory: 'HUBSPOT_DEFINED' as any,
-                  associationTypeId: 3, // Deal to Contact
-                },
-              ],
-            },
-          ],
-        });
-        dealId = createdDeal.id;
-        console.log(`[HubSpot] Deal créé : ${dealId} associé au contact ${contactId}`);
+          const createdDeal = await this.hubspotClient.crm.deals.basicApi.create({
+            properties: dealProperties,
+            associations: [
+              {
+                to: { id: contactId },
+                types: [
+                  {
+                    associationCategory: 'HUBSPOT_DEFINED' as any,
+                    associationTypeId: 3, // Deal to Contact
+                  },
+                ],
+              },
+            ],
+          });
+          dealId = createdDeal.id;
+          console.log(`[HubSpot] Deal créé : ${dealId} associé au contact ${contactId}`);
+        } catch (dealErr: any) {
+          console.error(`[HubSpot] Erreur lors de la création du Deal pour le contact ${contactId}:`, dealErr?.message || dealErr);
+          // On ne fait pas échouer toute la synchronisation du contact si seul le deal a échoué
+        }
       }
 
       await prisma.lead.update({
