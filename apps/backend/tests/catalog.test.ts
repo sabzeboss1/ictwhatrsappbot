@@ -53,6 +53,41 @@ describe('CatalogService & PDF Generation', () => {
     // Nettoyage après test
     catalogService.deleteCatalog(uploaded.id);
   });
+
+  it('should serve catalog with Content-Length, Accept-Ranges, and support Range 206', async () => {
+    const { fastify } = await import('fastify');
+    const { catalogRoutes } = await import('../src/modules/catalog/catalog.controller.js');
+    const app = fastify();
+    await app.register(catalogRoutes);
+
+    catalogService.ensureDefaultCatalogsExist();
+
+    // 1. Requête standard HTTP 200
+    const res200 = await app.inject({
+      method: 'GET',
+      url: '/api/catalogues/download/Catalogue_ICT_Tourisme_2026.pdf',
+    });
+    expect(res200.statusCode).toBe(200);
+    expect(res200.headers['content-type']).toBe('application/pdf');
+    expect(res200.headers['accept-ranges']).toBe('bytes');
+    expect(res200.headers['content-length']).toBeDefined();
+    expect(Number(res200.headers['content-length'])).toBeGreaterThan(500);
+
+    // 2. Requête par plage HTTP 206 (utilisée par Safari iOS et Chrome Android pour le trailer)
+    const res206 = await app.inject({
+      method: 'GET',
+      url: '/api/catalogues/download/Catalogue_ICT_Tourisme_2026.pdf',
+      headers: {
+        range: 'bytes=0-99',
+      },
+    });
+    expect(res206.statusCode).toBe(206);
+    expect(res206.headers['content-range']).toMatch(/^bytes 0-99\/\d+$/);
+    expect(res206.headers['content-length']).toBe('100');
+    expect(res206.headers['accept-ranges']).toBe('bytes');
+
+    await app.close();
+  });
 });
 
 describe('Lead Qualification with Catalog Detection', () => {

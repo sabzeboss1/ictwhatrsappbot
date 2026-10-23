@@ -7,6 +7,9 @@ localhost, :80 {
     handle /api/* {
         reverse_proxy backend:3001
     }
+    handle /public/catalogues/* {
+        reverse_proxy backend:3001
+    }
     handle /webhooks/* {
         reverse_proxy backend:3001
     }

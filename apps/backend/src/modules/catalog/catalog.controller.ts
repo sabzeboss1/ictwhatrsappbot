@@ -9,18 +9,55 @@ import { agentService } from '../agent/agent.service.js';
 export async function catalogRoutes(fastify: FastifyInstance) {
   // 1. Routes publiques : Téléchargement et visualisation des catalogues PDF
   const serveCatalogPdf = async (request: FastifyRequest<{ Params: { filename: string } }>, reply: FastifyReply) => {
-    const safeFilename = path.basename(request.params.filename);
+    const rawFilename = decodeURIComponent(request.params.filename);
+    const safeFilename = path.basename(rawFilename);
     const filePath = path.join(catalogService.getCataloguesDir(), safeFilename);
 
     if (!fs.existsSync(filePath)) {
       return reply.status(404).send({ error: 'Catalogue introuvable' });
     }
 
-    const stream = fs.createReadStream(filePath);
+    const stat = fs.statSync(filePath);
+    const fileSize = stat.size;
+    const range = request.headers.range;
+
+    // Nom de fichier encodé pour compatibilité universelle des navigateurs mobiles (RFC 5987)
+    const encodedFilename = encodeURIComponent(safeFilename);
+    const contentDisposition = `inline; filename="${safeFilename.replace(/"/g, '')}"; filename*=UTF-8''${encodedFilename}`;
+
+    // Support des Range Requests HTTP 206 (Indispensable pour iOS Safari, Android Chrome et WhatsApp Webview)
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+      if (isNaN(start) || start >= fileSize || end >= fileSize || start > end) {
+        reply.header('Content-Range', `bytes */${fileSize}`);
+        return reply.status(416).send('Requested range not satisfiable');
+      }
+
+      const fileBuffer = fs.readFileSync(filePath);
+      const chunk = fileBuffer.subarray(start, end + 1);
+
+      reply.status(206);
+      reply.header('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('Content-Length', chunk.length);
+      reply.header('Content-Type', 'application/pdf');
+      reply.header('Content-Disposition', contentDisposition);
+      reply.header('Cache-Control', 'public, max-age=3600');
+      return reply.send(chunk);
+    }
+
+    // Réponse complète HTTP 200 avec taille exacte et support des plages déclaré
+    const fileBuffer = fs.readFileSync(filePath);
+    reply.status(200);
+    reply.header('Content-Length', fileBuffer.length);
+    reply.header('Accept-Ranges', 'bytes');
     reply.header('Content-Type', 'application/pdf');
-    reply.header('Content-Disposition', `inline; filename="${safeFilename}"`);
+    reply.header('Content-Disposition', contentDisposition);
     reply.header('Cache-Control', 'public, max-age=3600');
-    return reply.send(stream);
+    return reply.send(fileBuffer);
   };
 
   fastify.get('/public/catalogues/:filename', serveCatalogPdf);

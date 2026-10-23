@@ -905,16 +905,16 @@ export class CatalogService {
     }
 
     const startXref = Buffer.byteLength(pdfStr, 'latin1');
-    pdfStr += `xref\n0 ${objects.length + 1}\n`;
-    pdfStr += '0000000000 65535 f \n';
+    pdfStr += `xref\r\n0 ${objects.length + 1}\r\n`;
+    pdfStr += '0000000000 65535 f \r\n';
 
     for (let i = 1; i <= objects.length; i++) {
       const offset = offsets[i] || 0;
-      pdfStr += `${offset.toString().padStart(10, '0')} 00000 n \n`;
+      pdfStr += `${offset.toString().padStart(10, '0')} 00000 n \r\n`;
     }
 
-    pdfStr += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\n`;
-    pdfStr += `startxref\n${startXref}\n%%EOF\n`;
+    pdfStr += `trailer\r\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\r\n`;
+    pdfStr += `startxref\r\n${startXref}\r\n%%EOF\r\n`;
 
     return Buffer.from(pdfStr, 'latin1');
   }
