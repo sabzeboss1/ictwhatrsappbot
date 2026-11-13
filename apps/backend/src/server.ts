@@ -8,6 +8,7 @@ import { initSocketIO } from './plugins/socketio.js';
 import { registerProcessors } from './queues/message.queue.js';
 import { whatsAppService } from './modules/whatsapp/whatsapp.service.js';
 import { hubspotService } from './modules/hubspot/hubspot.service.js';
+import { agentService } from './modules/agent/agent.service.js';
 import { SYSTEM_PROMPT_LEAD_QUALIFICATION, PROMPT_VERSION } from './modules/agent/prompts/lead-qualification.js';
 
 // Importation des routes
@@ -54,8 +55,9 @@ async function bootstrap() {
       timeWindow: '1 minute',
     });
 
-    // 2. Connexion Base de données
+    // 2. Connexion Base de données + chargement de la configuration IA persistée
     await connectPrisma();
+    await agentService.loadPersistedAiConfig();
 
     // 3. Initialisation Socket.IO attaché au serveur HTTP sous-jacent
     initSocketIO(fastify.server, env.CORS_ORIGIN);

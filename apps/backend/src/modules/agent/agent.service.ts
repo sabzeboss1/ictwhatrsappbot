@@ -32,12 +32,125 @@ export class AgentService {
   private static PROMPT_CACHE_TTL_MS = 10_000; // 10 secondes
 
   constructor() {
-    if (env.OPENAI_API_KEY) {
-      this.openaiClient = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    this.reinitClients();
+  }
+
+  private reinitClients(): void {
+    this.openaiClient = env.OPENAI_API_KEY ? new OpenAI({ apiKey: env.OPENAI_API_KEY }) : null;
+    this.anthropicClient = env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY }) : null;
+  }
+
+  /**
+   * Met à jour à chaud la configuration IA (clé Gemini, modèle, fournisseur) sans redémarrer le serveur.
+   */
+  public updateAiConfig(config: {
+    aiProvider?: 'gemini' | 'openai' | 'anthropic';
+    geminiApiKey?: string;
+    geminiModel?: string;
+    openaiApiKey?: string;
+    openaiModel?: string;
+    anthropicApiKey?: string;
+    anthropicModel?: string;
+  }): void {
+    if (config.aiProvider) env.AI_PROVIDER = config.aiProvider;
+    if (config.geminiApiKey !== undefined) env.GEMINI_API_KEY = config.geminiApiKey.trim();
+    if (config.geminiModel) env.GEMINI_MODEL = config.geminiModel.trim();
+    if (config.openaiApiKey !== undefined) env.OPENAI_API_KEY = config.openaiApiKey.trim();
+    if (config.openaiModel) env.OPENAI_MODEL = config.openaiModel.trim();
+    if (config.anthropicApiKey !== undefined) env.ANTHROPIC_API_KEY = config.anthropicApiKey.trim();
+    if (config.anthropicModel) env.ANTHROPIC_MODEL = config.anthropicModel.trim();
+    this.reinitClients();
+  }
+
+  /**
+   * Charge au démarrage la configuration IA sauvegardée en base de données (table AppSetting).
+   */
+  public async loadPersistedAiConfig(): Promise<void> {
+    try {
+      const row = await prisma.appSetting.findUnique({ where: { key: 'ai_config' } });
+      if (row && row.value && typeof row.value === 'object') {
+        const val = row.value as Record<string, any>;
+        this.updateAiConfig({
+          aiProvider: val.aiProvider || undefined,
+          geminiApiKey: typeof val.geminiApiKey === 'string' && val.geminiApiKey.trim() ? val.geminiApiKey : undefined,
+          geminiModel: typeof val.geminiModel === 'string' && val.geminiModel.trim() ? val.geminiModel : undefined,
+          openaiApiKey: typeof val.openaiApiKey === 'string' && val.openaiApiKey.trim() ? val.openaiApiKey : undefined,
+          openaiModel: typeof val.openaiModel === 'string' && val.openaiModel.trim() ? val.openaiModel : undefined,
+          anthropicApiKey: typeof val.anthropicApiKey === 'string' && val.anthropicApiKey.trim() ? val.anthropicApiKey : undefined,
+          anthropicModel: typeof val.anthropicModel === 'string' && val.anthropicModel.trim() ? val.anthropicModel : undefined,
+        });
+        console.log(`✓ [AgentService] Configuration IA chargée depuis la base de données (provider: ${env.AI_PROVIDER}, modèle Gemini: ${env.GEMINI_MODEL})`);
+      }
+    } catch (err: any) {
+      console.warn('[AgentService] Impossible de charger ai_config depuis la base:', err?.message || err);
     }
-    if (env.ANTHROPIC_API_KEY) {
-      this.anthropicClient = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  }
+
+  /**
+   * Teste en direct une clé API Google Gemini avec bascule de modèles si nécessaire.
+   */
+  public async testGeminiConnection(apiKeyOverride?: string, modelOverride?: string): Promise<{
+    ok: boolean;
+    model?: string;
+    latencyMs: number;
+    reply?: string;
+    error?: string;
+  }> {
+    const start = Date.now();
+    const apiKey = (apiKeyOverride && apiKeyOverride.trim() ? apiKeyOverride.trim() : env.GEMINI_API_KEY || '').trim();
+    if (!apiKey) {
+      return { ok: false, latencyMs: 0, error: 'Aucune clé API Gemini fournie.' };
     }
+
+    const modelsToTry = Array.from(
+      new Set(
+        [
+          modelOverride?.trim(),
+          env.GEMINI_MODEL,
+          'gemini-2.5-flash',
+          'gemini-2.0-flash',
+          'gemini-flash-latest',
+          'gemini-2.5-flash-lite',
+        ].filter(Boolean) as string[]
+      )
+    );
+
+    let lastErr = 'Erreur inconnue';
+    for (const model of modelsToTry) {
+      try {
+        const res = await axios.post(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            contents: [{ role: 'user', parts: [{ text: 'Réponds uniquement : Connexion Gemini OK 🇨🇲' }] }],
+            generationConfig: { maxOutputTokens: 30, temperature: 0.1 },
+          },
+          { headers: { 'Content-Type': 'application/json' }, timeout: 12000 }
+        );
+        const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (text) {
+          return {
+            ok: true,
+            model,
+            latencyMs: Date.now() - start,
+            reply: text,
+          };
+        }
+      } catch (err: any) {
+        const status = err.response?.status;
+        const apiMessage = err.response?.data?.error?.message || err.message;
+        lastErr = status ? `HTTP ${status} — ${apiMessage}` : apiMessage;
+        // Si la clé est invalide (400 API_KEY_INVALID ou 403), inutile d'essayer d'autres modèles
+        if (status === 400 || status === 401 || status === 403) {
+          break;
+        }
+      }
+    }
+
+    return {
+      ok: false,
+      latencyMs: Date.now() - start,
+      error: lastErr,
+    };
   }
 
   /**
