@@ -495,7 +495,7 @@ export class WhatsAppService {
     // 4. Commande de réinitialisation directe par l'utilisateur (utile pour les tests)
     const cleanLower = text.trim().toLowerCase();
     if (cleanLower === 'reset' || cleanLower === 'recommencer' || cleanLower === 'menu' || cleanLower === '/reset') {
-      const resetReply = "🔄 *Conversation réinitialisée !*\n\nBonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nQuel type d'expérience touristique souhaitez-vous vivre au Cameroun (séjour balnéaire à Kribi, écotourisme en pirogue à Ebogo, ou ascension du Mont Cameroun) ?";
+      const resetReply = "🔄 *Conversation réinitialisée !*\n\nBonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nComment pouvons-nous vous accompagner aujourd'hui ?";
 
       const updatedLead = await prisma.lead.update({
         where: { id: lead.id },

@@ -141,6 +141,9 @@ export class AgentService {
   }): Promise<LeadQualificationOutput> {
     const { inboundText, conversationHistory, existingLeadData } = params;
 
+    // Précharger systématiquement le prompt actif depuis la DB pour que même le secours l'utilise
+    await this.getActivePrompt().catch(() => undefined);
+
     // 1. Tenter via Google Gemini si configuré (soit explicitement, soit si aucun client OpenAI/Anthropic)
     if (env.GEMINI_API_KEY && (env.AI_PROVIDER === 'gemini' || (!this.openaiClient && !this.anthropicClient))) {
       try {
@@ -275,6 +278,8 @@ export class AgentService {
           'gemini-flash-lite-latest',
           'gemini-2.5-flash',
           'gemini-2.5-flash-lite',
+          'gemini-2.0-flash',
+          'gemini-2.0-flash-lite',
         ].filter(Boolean) as string[]
       )
     );
@@ -313,16 +318,38 @@ export class AgentService {
       throw lastError || new Error('Tous les modèles Gemini ont échoué');
     }
 
-    // Extraire le JSON même s'il est enveloppé dans du markdown
+    return this.parseModelOutput(rawText);
+  }
+
+  /**
+   * Parse résilient de la sortie JSON d'un LLM (Gemini / Claude / OpenAI).
+   * Évite qu'un retour JSON mal échappé ou en texte brut ne déclenche par erreur le fallback heuristique.
+   */
+  private parseModelOutput(rawText: string): LeadQualificationOutput {
     let jsonStr = rawText.trim();
     const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || jsonStr.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       jsonStr = jsonMatch[1] || jsonMatch[0];
     }
 
-    const parsed = JSON.parse(jsonStr);
-    this.normalizeOutputKeys(parsed);
-    return LeadQualificationOutputSchema.parse(parsed);
+    try {
+      const parsed = JSON.parse(jsonStr);
+      this.normalizeOutputKeys(parsed);
+      return LeadQualificationOutputSchema.parse(parsed);
+    } catch {
+      // Tentative 2 : extraction directe du champ whatsapp_message si des retours à la ligne non échappés ont cassé JSON.parse
+      const msgMatch = jsonStr.match(/"whatsapp_message"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+      if (msgMatch?.[1]) {
+        const cleanMsg = msgMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+        return LeadQualificationOutputSchema.parse({ whatsapp_message: cleanMsg });
+      }
+      // Tentative 3 : le modèle a répondu directement en texte brut (sans JSON)
+      const plainText = rawText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+      if (plainText && !plainText.startsWith('{')) {
+        return LeadQualificationOutputSchema.parse({ whatsapp_message: plainText });
+      }
+      throw new Error('Impossible de parser la réponse du modèle IA');
+    }
   }
 
   private async callOpenAI(
@@ -700,20 +727,41 @@ Structure JSON exacte requise :
       customer_type = 'Groupe';
     }
 
-    // 6. Détection Destination / Offre
-    if (textLower.match(/kribi|chutes de la lobé|chutes de la lobe|lobé|lobe|plage/)) {
+    // 6. Détection Destination / Offre (compatible avec toutes les campagnes ICT + prompt actif)
+    const activePromptText = (this.cachedPrompt?.prompt || '').toLowerCase();
+    if (textLower.match(/îl[e]?\s*eding|ile\s*eding|\beding\b|day\s*pass/)) {
+      recommended_offer = 'Île Eding';
+      product_identified = true;
+    } else if (textLower.match(/\bavip\b|assistance\s*voyage|accueil.*aéroport|accueil.*aeroport/)) {
+      recommended_offer = 'Assistance Voyage (AVIP)';
+      product_identified = true;
+    } else if (textLower.match(/sourcing|turquie|black\s*friday|voyage\s*d'affaires/)) {
+      recommended_offer = 'Sourcing Turquie';
+      product_identified = true;
+    } else if (textLower.match(/inside\s*school|école|ecole|scolaire/)) {
+      recommended_offer = 'Inside School';
+      product_identified = true;
+    } else if (textLower.match(/inside\s*team\s*building/)) {
+      recommended_offer = 'Inside Team Building';
+      product_identified = true;
+      is_b2b = true;
+      customer_type = 'Entreprise';
+    } else if (textLower.match(/découvrir le cameroun|decouvrir le cameroun|inside\s*day/)) {
+      recommended_offer = 'Découvrir le Cameroun';
+      product_identified = true;
+    } else if (textLower.match(/kribi|chutes de la lobé|chutes de la lobe|lobé|lobe/)) {
       recommended_offer = 'Escapade Balnéaire Kribi & Chutes de la Lobé';
       product_identified = true;
-    } else if (textLower.match(/ebogo|pirogue|fleuve nyong|nyong|écotourisme|ecotourisme/)) {
+    } else if (textLower.match(/ebogo|pirogue|fleuve nyong|nyong/)) {
       recommended_offer = 'Excursion Écotourisme Ebogo & Pirogue';
       product_identified = true;
-    } else if (textLower.match(/mont cameroun|char des dieux|buea|randonnée|randonnee|trek|ascension/)) {
+    } else if (textLower.match(/mont cameroun|char des dieux|buea|ascension/)) {
       recommended_offer = 'Ascension Mont Cameroun (Buea)';
       product_identified = true;
     } else if (textLower.match(/limbé|limbe|sémé|seme/)) {
       recommended_offer = 'Découverte Côtière Limbé & Sémé Beach';
       product_identified = true;
-    } else if (textLower.match(/sur-mesure|personnalisé|circuit spécial|3 semaines/)) {
+    } else if (textLower.match(/sur-mesure|sur mesure|personnalisé|circuit spécial|3 semaines/)) {
       custom_request = true;
       product_standard = false;
     }
@@ -746,7 +794,14 @@ Structure JSON exacte requise :
     const askedAboutBudget = assistantHistory.some((m) => m.includes('budget'));
     const askedAboutObjective = assistantHistory.some((m) => m.includes('objectif principal'));
 
-    // 10. Génération du message WhatsApp dynamique et contextuel
+    // Extraction éventuelle des puces d'offres définies dans le prompt actif en base
+    const activeBullets = (this.cachedPrompt?.prompt || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('•') && l.length > 4 && l.length < 140)
+      .slice(0, 6);
+
+    // 10. Génération du message WhatsApp dynamique et fidèle au prompt actif (sans jamais imposer Kribi/Ebogo par défaut)
     let whatsapp_message = '';
 
     if (is_b2b) {
@@ -754,32 +809,38 @@ Structure JSON exacte requise :
       if (!askedAboutObjective && !textLower.match(/team\s*building|teams\s*building|cohésion|séminaire/)) {
         whatsapp_message = `Bonjour et merci d'avoir contacté Inside Cameroon Tourism ! 🇨🇲\n\nNous concevons des événements d'entreprise sur-mesure (Team Building, séminaires, retraites au vert). Quel est l'objectif principal de cette sortie ?`;
       } else if (!participants_count) {
-        whatsapp_message = `C'est parfaitement noté pour votre Team Building ! Pour vous concevoir une proposition adaptée (activités de cohésion, transport et hébergement), pour combien de collaborateurs prévoyez-vous cet événement ?`;
+        whatsapp_message = `C'est parfaitement noté pour votre Team Building ! Pour vous concevoir une proposition adaptée, pour combien de collaborateurs prévoyez-vous cet événement ?`;
       } else if (!preferred_date) {
         whatsapp_message = `Très bien pour votre groupe de ${participants_count} collaborateurs ! À quelle période ou date idéale souhaiteriez-vous organiser cette sortie ?`;
-      } else if (!product_identified) {
-        whatsapp_message = `Super projet ! Préférez-vous une formule détente en bord de mer à Kribi (plage, olympiades et fruits de mer) ou une expérience nature à Ebogo (pirogue et cohésion d'équipe) ?`;
       } else {
-        whatsapp_message = `Parfait ! Toutes les informations sont réunies pour votre Team Building de ${participants_count} personnes à ${recommended_offer || 'Kribi'}. À quelle adresse email ou auprès de quel responsable pouvons-nous vous transmettre le devis proforma et le programme détaillé ?`;
+        whatsapp_message = `Parfait ! Toutes les informations sont réunies pour votre Team Building de ${participants_count} personnes${recommended_offer ? ` (${recommended_offer})` : ''}. À quelle adresse email ou auprès de quel responsable pouvons-nous vous transmettre le devis proforma et le programme détaillé ?`;
       }
     } else if (budgetExtractedInThisTurn || (budget && askedAboutBudget && !lastAssistantMsg.includes('brochure') && !lastAssistantMsg.includes('modalités'))) {
-      // Le prospect vient de préciser son budget
-      const offerName = recommended_offer || 'Escapade Balnéaire Kribi & Chutes de la Lobé';
-      whatsapp_message = `C'est un excellent budget ! Avec ${budget} pour ${participants_count ? participants_count + ' personnes' : 'votre séjour'} en ${preferred_date || 'décembre'}, notre expérience "${offerName}" correspond parfaitement (hébergement de qualité, transport et visites guidées inclus).\n\nSouhaitez-vous recevoir la brochure détaillée et les disponibilités pour finaliser votre réservation ?`;
+      const offerName = recommended_offer || 'notre formule sur-mesure';
+      whatsapp_message = `C'est bien noté pour votre budget de ${budget}${participants_count ? ` pour ${participants_count} personnes` : ''}${preferred_date ? ` (${preferred_date})` : ''} sur ${offerName}.\n\nSouhaitez-vous recevoir les détails complets et les disponibilités pour finaliser votre réservation ?`;
     } else if (purchase_intent === 'veut_reserver') {
-      whatsapp_message = `Excellente nouvelle ! L'offre "${recommended_offer || 'choisie'}" est disponible. Souhaitez-vous bloquer votre réservation dès maintenant avec un acompte sécurisé ou échanger directement avec un conseiller ICT ?`;
+      whatsapp_message = `Excellente nouvelle ! L'offre "${recommended_offer || 'choisie'}" est disponible. Souhaitez-vous bloquer votre réservation dès maintenant ou échanger directement avec un conseiller ICT ?`;
     } else if (purchase_intent === 'demande_prix' && !participants_count) {
-      whatsapp_message = `Nos formules pour ${recommended_offer || 'Kribi'} démarrent à partir de 75 000 FCFA / personne en formule week-end tout compris (transport climatisé, hôtel partenaire, visite des Chutes de la Lobé et repas). Pour combien de personnes prévoyez-vous ce séjour ?`;
+      whatsapp_message = `Avec plaisir pour vous communiquer le tarif exact${recommended_offer ? ` pour ${recommended_offer}` : ''} ! Pour combien de participants et pour quelle date envisagez-vous ce projet ?`;
     } else if (!product_identified) {
-      whatsapp_message = `Bonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nC'est un plaisir de vous accompagner. Quelle destination vous ferait plaisir pour ce séjour (détente balnéaire à Kribi, écotourisme en pirogue à Ebogo, ou randonnée au Mont Cameroun) ?`;
+      if (assistantHistory.length > 0) {
+        // Ne jamais répéter le message de bienvenue si la conversation est déjà engagée
+        whatsapp_message = `Merci pour votre message ! 😊 Quelle offre d'Inside Cameroon Tourism vous intéresse en particulier ?`;
+      } else if (activeBullets.length > 0) {
+        whatsapp_message = `Bonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nQuelle offre ICT vous intéresse ?\n\n${activeBullets.join('\n')}\n\nRépondez simplement par le nom de l'offre. 😊`;
+      } else if (activePromptText.includes('eding') && !activePromptText.includes('découvrir le cameroun')) {
+        whatsapp_message = `Bonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nSouhaitez-vous des informations sur l'Île Eding (Day Pass, séjour, privatisation ou Team Building) ?`;
+      } else {
+        whatsapp_message = `Bonjour et bienvenue chez Inside Cameroon Tourism ! 🇨🇲\n\nQuelle offre ou expérience souhaiteriez-vous découvrir aujourd'hui ?`;
+      }
     } else if (!preferred_date) {
-      whatsapp_message = `C'est une magnifique destination ! L'expérience "${recommended_offer}" est l'un de nos plus beaux programmes. À quelle date ou période souhaiteriez-vous planifier ce voyage ?`;
+      whatsapp_message = `Excellent choix pour "${recommended_offer}" ! À quelle date ou période souhaiteriez-vous planifier cela ?`;
     } else if (!participants_count) {
-      whatsapp_message = `C'est bien noté pour ${preferred_date} ! Pour combien de participants (adultes et enfants) prévoyez-vous cette expérience ?`;
+      whatsapp_message = `C'est bien noté pour ${preferred_date} ! Pour combien de participants prévoyez-vous cette expérience ?`;
     } else if (!budget) {
-      whatsapp_message = `Parfait, nous réservons le créneau pour ${participants_count} personnes en ${preferred_date}. Avez-vous une estimation de votre budget global pour ce séjour ?`;
+      whatsapp_message = `Parfait, nous notons ${participants_count} participant(s) pour ${preferred_date} (${recommended_offer}). Souhaitez-vous qu'un conseiller vous transmette la proposition détaillée ?`;
     } else {
-      whatsapp_message = `Toutes vos informations sont bien enregistrées pour votre séjour à ${recommended_offer || 'Kribi'} (${participants_count} personnes en ${preferred_date}). Souhaitez-vous qu'un conseiller ICT vous appelle pour finaliser les détails ou préférez-vous recevoir le programme par WhatsApp ?`;
+      whatsapp_message = `Toutes vos informations sont bien enregistrées pour ${recommended_offer} (${participants_count} personnes, ${preferred_date}). Souhaitez-vous qu'un conseiller ICT vous contacte pour finaliser votre réservation ?`;
     }
 
     // 11. Détection dynamique de Demande ou Acceptation de Catalogue PDF

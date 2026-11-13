@@ -119,19 +119,18 @@ async function bootstrap() {
       }
     }, 5000);
 
-    // 8. Seed du prompt par défaut en base s'il n'existe pas encore
+    // 8. Seed du prompt par défaut en base UNIQUEMENT si la table des prompts est totalement vide.
+    // Ne JAMAIS écraser un prompt existant en base au redémarrage pour ne pas perdre les modifications de l'admin.
     try {
-      const existingDefault = await prisma.promptTemplate.findFirst({
-        where: { isDefault: true },
-      });
+      const totalPrompts = await prisma.promptTemplate.count();
 
-      if (!existingDefault) {
-        console.log('[Startup] Création du prompt par défaut en base de données...');
+      if (totalPrompts === 0) {
+        console.log('[Startup] Table des prompts vide — création du prompt initial...');
         await prisma.promptTemplate.create({
           data: {
             name: 'ICT Tourisme — Prompt Principal',
             slug: 'ict-tourisme-principal',
-            description: 'Prompt système original d\'ICT pour la qualification commerciale WhatsApp. Agent IA de vente touristique.',
+            description: 'Prompt système principal d\'ICT pour la qualification commerciale WhatsApp.',
             prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
             isActive: true,
             isDefault: true,
@@ -139,19 +138,23 @@ async function bootstrap() {
             version: PROMPT_VERSION,
           },
         });
-        console.log('✓ [Startup] Prompt par défaut créé et activé');
-      } else if (existingDefault.version !== PROMPT_VERSION) {
-        console.log(`[Startup] Mise à jour du prompt par défaut: v${existingDefault.version} → v${PROMPT_VERSION}`);
-        await prisma.promptTemplate.update({
-          where: { id: existingDefault.id },
-          data: {
-            prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
-            version: PROMPT_VERSION,
-          },
-        });
-        console.log(`✓ [Startup] Prompt par défaut mis à jour avec succès (v${PROMPT_VERSION})`);
+        console.log('✓ [Startup] Prompt initial créé et activé');
       } else {
-        console.log(`✓ [Startup] Prompt par défaut existant: "${existingDefault.name}" (v${existingDefault.version})`);
+        // Garantir qu'un seul prompt maximum est actif simultanément en base
+        const activePrompts = await prisma.promptTemplate.findMany({
+          where: { isActive: true },
+          orderBy: { updatedAt: 'desc' },
+        });
+        if (activePrompts.length > 1) {
+          const keepId = activePrompts[0].id;
+          await prisma.promptTemplate.updateMany({
+            where: { isActive: true, id: { not: keepId } },
+            data: { isActive: false },
+          });
+          console.log(`✓ [Startup] Nettoyage de ${activePrompts.length - 1} prompt(s) actif(s) en doublon (conservé: "${activePrompts[0].name}")`);
+        } else if (activePrompts.length === 1) {
+          console.log(`✓ [Startup] Prompt actif en base: "${activePrompts[0].name}" (v${activePrompts[0].version})`);
+        }
       }
     } catch (err: any) {
       console.warn('[Startup] Seed prompt ignoré (table peut ne pas exister encore):', err.message);
