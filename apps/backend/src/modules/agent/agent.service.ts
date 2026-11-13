@@ -347,6 +347,8 @@ export class AgentService {
           intent: existingLeadData.intent || undefined,
           need: existingLeadData.need || undefined,
           recommendedOffer: existingLeadData.recommendedOffer || undefined,
+          quotedPrice: existingLeadData.quotedPrice || undefined,
+          estimatedAmount: existingLeadData.estimatedAmount || undefined,
           preferredDate: existingLeadData.preferredDate || undefined,
           participantsCount: existingLeadData.participantsCount || undefined,
           budget: existingLeadData.budget || undefined,
@@ -373,6 +375,13 @@ RÈGLE ABSOLUE ANTI-BLOCAGE ET CHANGEMENT DE SUJET (TOPIC SWITCH) :
 Données actuelles connues sur ce prospect (session en cours) :
 ${JSON.stringify(sanitizedLeadData, null, 2)}
 
+RÈGLES D'EXTRACTION DES CRITÈRES COMMERCIAUX (utilisées par l'équipe de closing) :
+- "recommended_offer" : nom exact de l'offre / formule choisie ou recommandée.
+- "quoted_price" : UNIQUEMENT le prix que tu as effectivement communiqué au prospect (ou qu'il a cité comme tarif de l'offre), avec unité (ex: "75 000 FCFA / pers"). null si aucun prix n'a été annoncé. N'invente JAMAIS de prix.
+- "estimated_amount" : montant total estimé en FCFA (nombre entier, sans texte) = prix unitaire × participants si les deux sont connus avec certitude, sinon null.
+- "participants_count" et "preferred_date" : conserver les valeurs déjà connues tant que le prospect ne les modifie pas.
+- "first_name" / "last_name" : NE JAMAIS inventer. Ne remplir que si le prospect donne son nom.
+
 INSTRUCTION CRUCIALE DE FORMAT DE SORTIE :
 Tu dois impérativement renvoyer UNIQUEMENT un objet JSON valide (sans aucun texte d'introduction ni de conclusion).
 Le champ contenant le message WhatsApp destiné au client DOIT OBLIGATOIREMENT s'appeler "whatsapp_message".
@@ -388,6 +397,8 @@ Structure JSON exacte requise :
   "preferred_date": null,
   "budget": null,
   "recommended_offer": null,
+  "quoted_price": null,
+  "estimated_amount": null,
   "product_identified": false,
   "purchase_intent": "information",
   "availability_confirmed": false,
@@ -779,6 +790,9 @@ Structure JSON exacte requise :
       preferred_date,
       budget,
       recommended_offer,
+      quoted_price: whatsapp_message.includes('75 000 FCFA') ? '75 000 FCFA / pers' : existingLeadData?.quotedPrice || null,
+      estimated_amount:
+        whatsapp_message.includes('75 000 FCFA') && participants_count ? 75000 * participants_count : existingLeadData?.estimatedAmount || null,
       product_identified,
       purchase_intent,
       availability_confirmed: purchase_intent === 'veut_reserver',

@@ -11,6 +11,10 @@ import {
   ShieldCheck,
   ArrowRight,
   Sparkles,
+  Download,
+  BellRing,
+  Coins,
+  Calendar,
 } from 'lucide-react';
 import {
   BarChart,
@@ -79,10 +83,24 @@ export const Overview: React.FC = () => {
             Performances du bot WhatsApp ICT, qualification automatique et entonnoir de conversion.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Link
+            to="/followups"
+            className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold px-3.5 py-2.5 rounded-xl border border-slate-700 transition-all text-xs"
+          >
+            <BellRing className="w-4 h-4 text-amber-400" />
+            <span>Relances ({stats?.pendingFollowUps || 0})</span>
+          </Link>
+          <Link
+            to="/leads"
+            className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold px-3.5 py-2.5 rounded-xl border border-emerald-500/30 transition-all text-xs"
+          >
+            <Download className="w-4 h-4" />
+            <span>Leads & Export</span>
+          </Link>
           <Link
             to="/conversations"
-            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all text-xs sm:text-sm"
+            className="flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold px-4 py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all text-xs sm:text-sm"
           >
             <MessageSquare className="w-4 h-4" />
             <span>Ouvrir les conversations</span>
@@ -239,6 +257,23 @@ export const Overview: React.FC = () => {
                           {lead.company ? `${lead.company} • ` : ''}
                           {lead.recommendedOffer || 'Demande personnalisée'}
                         </p>
+                        <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-slate-400">
+                          {lead.quotedPrice && (
+                            <span className="text-emerald-300 font-semibold bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                              {lead.quotedPrice}
+                            </span>
+                          )}
+                          {lead.participantsCount && (
+                            <span className="bg-slate-900 px-1.5 py-0.5 rounded">
+                              {lead.participantsCount} pers.
+                            </span>
+                          )}
+                          {lead.preferredDate && (
+                            <span className="bg-slate-900 px-1.5 py-0.5 rounded">
+                              {lead.preferredDate}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex flex-col items-end">
                         <span className="text-xs font-extrabold text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded">
@@ -261,6 +296,60 @@ export const Overview: React.FC = () => {
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
+      </div>
+
+      {/* Pipeline commercial & Répartition par offre */}
+      <div className="glass-panel rounded-2xl p-6 border border-slate-800 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Coins className="w-4 h-4 text-emerald-400" />
+              <span>Synthèse Commerciale par Offre</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Répartition des offres sélectionnées, volume de participants et pipeline estimé.
+            </p>
+          </div>
+          <div className="flex items-center gap-4 text-xs">
+            <div className="bg-slate-900/90 px-3.5 py-2 rounded-xl border border-slate-800">
+              <span className="text-slate-400">Participants cumulés : </span>
+              <strong className="text-white">{stats?.totalParticipants || 0} pers.</strong>
+            </div>
+            <div className="bg-emerald-500/10 px-3.5 py-2 rounded-xl border border-emerald-500/30">
+              <span className="text-emerald-300">Pipeline estimé : </span>
+              <strong className="text-emerald-400">
+                {(stats?.estimatedPipelineFcfa || 0).toLocaleString('fr-FR')} FCFA
+              </strong>
+            </div>
+          </div>
+        </div>
+
+        {!stats?.byOffer?.length ? (
+          <p className="text-xs text-slate-500 py-4 text-center">Aucune offre identifiée pour le moment.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {stats.byOffer.map((o: any) => (
+              <Link
+                key={o.offer}
+                to={`/leads?offer=${encodeURIComponent(o.offer)}`}
+                className="p-3.5 rounded-xl bg-slate-900/60 hover:bg-slate-800/70 border border-slate-800 hover:border-emerald-500/40 transition-all"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-xs font-bold text-white line-clamp-1">{o.offer}</span>
+                  <span className="text-[11px] font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full shrink-0">
+                    {o.count} lead{o.count > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-400 mt-2">
+                  <span>{o.participants || 0} participants</span>
+                  <span className="text-amber-300 font-semibold">
+                    {o.amount ? `${o.amount.toLocaleString('fr-FR')} FCFA` : 'Montant à chiffrer'}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

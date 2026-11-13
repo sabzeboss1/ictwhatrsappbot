@@ -244,7 +244,7 @@ export class WhatsAppService {
   /**
    * Envoie un message WhatsApp via l'API Evolution
    */
-  public async sendWhatsAppMessage(phone: string, text: string): Promise<any> {
+  public async sendWhatsAppMessage(phone: string, text: string, opts?: { typingDelayMs?: number }): Promise<any> {
     // Si c'est un @lid, envoyer le JID complet. Sinon, envoyer le numéro nettoyé.
     let target = phone.includes('@lid')
       ? phone
@@ -274,21 +274,28 @@ export class WhatsAppService {
 
     try {
       console.log(`[WhatsApp API] Envoi message sortant à ${target}...`);
+      const payload: any = {
+        number: target,
+        text: text,
+        textMessage: {
+          text,
+        },
+      };
+      // Simulation de saisie "en train d'écrire..." (comportement humain, réduit le risque anti-spam)
+      // `delay` = Evolution API v2, `options` = Evolution API v1
+      if (opts?.typingDelayMs && opts.typingDelayMs > 0) {
+        payload.delay = opts.typingDelayMs;
+        payload.options = { delay: opts.typingDelayMs, presence: 'composing' };
+      }
       const response = await axios.post(
         url,
-        {
-          number: target,
-          text: text,
-          textMessage: {
-            text,
-          },
-        },
+        payload,
         {
           headers: {
             apikey: env.EVOLUTION_API_KEY,
             'Content-Type': 'application/json',
           },
-          timeout: 10000,
+          timeout: 10000 + (opts?.typingDelayMs || 0),
         }
       );
       console.log(`✓ [WhatsApp API] Réponse délivrée à ${target}:`, JSON.stringify(response.data));
@@ -408,26 +415,17 @@ export class WhatsAppService {
         `[WhatsAppService] ⏱️ Expiration de session pour ${phone} (${minutesInactive} min d'inactivité > ${sessionTtlMinutes} min TTL). Réinitialisation de la mémoire et du contexte prospect.`
       );
 
-      // Réinitialiser les données volatiles pour repartir sur une page blanche
+      // Réinitialiser uniquement le CONTEXTE CONVERSATIONNEL (étape, intention, objections).
+      // Les critères commerciaux (offre, prix, participants, date, budget, score) sont CONSERVÉS
+      // en base pour l'équipe de closing et les relances ; ils sont simplement masqués à l'IA
+      // pour ce nouveau tour (voir freshSession) afin d'éviter tout blocage sur un ancien sujet.
       lead = await prisma.lead.update({
         where: { id: lead.id },
         data: {
           conversationStage: 'NEW_CONTACT',
           intent: null,
-          need: null,
-          recommendedOffer: null,
           purchaseIntent: 'information',
-          productIdentified: false,
-          availabilityConfirmed: false,
-          productStandard: false,
-          customRequest: false,
-          preferredDate: null,
-          budget: null,
-          participantsCount: null,
           objections: [],
-          qualificationScore: 0,
-          leadStatus: 'Nouveau',
-          nextStep: 'Qualification',
         },
       });
       emitLeadUpdated(lead);
@@ -444,7 +442,55 @@ export class WhatsAppService {
       },
     });
 
+    // Le prospect a répondu : on remet à zéro le compteur de relances et on annule les relances
+    // automatiques en attente (inutile de relancer quelqu'un qui vient d'écrire).
+    lead = await prisma.lead.update({
+      where: { id: lead.id },
+      data: { lastInboundAt: new Date(), followUpCount: 0 },
+    });
+    await prisma.followUp
+      .updateMany({
+        where: { leadId: lead.id, status: 'pending', type: 'auto' },
+        data: { status: 'cancelled', error: 'Le prospect a répondu' },
+      })
+      .catch(() => undefined);
+
     emitNewMessage(inboundMessage, lead);
+
+    // 4bis. Désinscription / réinscription aux relances (STOP / START) — obligatoire pour ne pas être signalé
+    const optCommand = this.detectOptCommand(text);
+    if (optCommand) {
+      const isStop = optCommand === 'stop';
+      const reply = isStop
+        ? "C'est bien noté ✅ Vous ne recevrez plus de relances de notre part. Si vous souhaitez reprendre contact, écrivez simplement *START* ou posez-nous votre question à tout moment. Belle journée !"
+        : '✅ Parfait, vous êtes de nouveau inscrit(e). Comment pouvons-nous vous aider pour votre prochain séjour au Cameroun ?';
+
+      const updatedLead = await prisma.lead.update({
+        where: { id: lead.id },
+        data: isStop
+          ? { optOut: true, optOutAt: new Date(), lastOutboundAt: new Date() }
+          : { optOut: false, optOutAt: null, lastOutboundAt: new Date() },
+      });
+      if (isStop) {
+        await prisma.followUp
+          .updateMany({
+            where: { leadId: lead.id, status: 'pending' },
+            data: { status: 'cancelled', error: 'Désinscription STOP' },
+          })
+          .catch(() => undefined);
+      }
+      await prisma.auditLog.create({
+        data: { actorId: 'system', action: isStop ? 'lead.opt_out' : 'lead.opt_in', entityId: lead.id, metadata: { text } },
+      });
+
+      const outboundMessage = await prisma.message.create({
+        data: { leadId: lead.id, direction: 'outbound', content: reply, messageType: 'text' },
+      });
+      await this.sendWhatsAppMessage(phone, reply);
+      emitNewMessage(outboundMessage, updatedLead);
+      emitLeadUpdated(updatedLead);
+      return { duplicate: false, processedByAI: false };
+    }
 
     // 4. Commande de réinitialisation directe par l'utilisateur (utile pour les tests)
     const cleanLower = text.trim().toLowerCase();
@@ -497,9 +543,34 @@ export class WhatsAppService {
       leadId: lead.id,
       inboundText: text,
       phone,
+      freshSession: isSessionExpired,
     });
 
     return { duplicate: false, processedByAI: true };
+  }
+
+  /**
+   * Détecte une commande explicite de désinscription (STOP) ou réinscription (START).
+   * Correspondance stricte sur le message entier pour éviter les faux positifs.
+   */
+  public detectOptCommand(text: string): 'stop' | 'start' | null {
+    const t = (text || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[.!?\s]+$/g, '');
+    if (
+      /^(stop|stopp?er|arret|arreter|stop relances?|(me |se )?desabonner|desinscription|unsubscribe|ne plus me contacter)$/.test(
+        t
+      )
+    ) {
+      return 'stop';
+    }
+    if (/^(start|reprendre|(me |se )?reabonner)$/.test(t)) {
+      return 'start';
+    }
+    return null;
   }
 
   /**
@@ -560,8 +631,8 @@ export class WhatsAppService {
   /**
    * Traitement du message par l'agent IA, scoring et synchronisations
    */
-  public async processLeadThroughAI(data: { leadId: string; inboundText: string; phone: string }) {
-    const { leadId, inboundText, phone } = data;
+  public async processLeadThroughAI(data: { leadId: string; inboundText: string; phone: string; freshSession?: boolean }) {
+    const { leadId, inboundText, phone, freshSession } = data;
 
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -576,12 +647,27 @@ export class WhatsAppService {
       `[WhatsAppService] 🧠 Traitement IA pour ${phone} — Historique session active: ${history.length} messages (TTL: ${env.SESSION_TTL_MINUTES || 120} min)`
     );
 
+    // Nouvelle session après inactivité : on masque à l'IA les critères de l'ancienne session
+    // (ils restent en base et seront conservés si l'IA ne les remplace pas).
+    const leadContextForAI = freshSession
+      ? {
+          ...lead,
+          need: null,
+          recommendedOffer: null,
+          quotedPrice: null,
+          estimatedAmount: null,
+          preferredDate: null,
+          participantsCount: null,
+          budget: null,
+        }
+      : lead;
+
     // Appel Agent IA
     const aiOutput = await agentService.qualifyMessage({
       inboundText,
       senderPhone: phone,
       conversationHistory: history,
-      existingLeadData: lead,
+      existingLeadData: leadContextForAI,
     });
 
     // Calcul du score et du routage selon la logique n8n d'origine
@@ -620,6 +706,9 @@ export class WhatsAppService {
         preferredDate: aiOutput.preferred_date || lead.preferredDate,
         budget: aiOutput.budget || lead.budget,
         recommendedOffer: aiOutput.recommended_offer || lead.recommendedOffer,
+        quotedPrice: aiOutput.quoted_price || lead.quotedPrice,
+        estimatedAmount: aiOutput.estimated_amount || lead.estimatedAmount,
+        lastOutboundAt: new Date(),
         productIdentified: aiOutput.product_identified,
         purchaseIntent: aiOutput.purchase_intent,
         availabilityConfirmed: aiOutput.availability_confirmed,
@@ -718,6 +807,7 @@ export class WhatsAppService {
       data: {
         aiDisabled: true,
         assignedAgentId: agentUserId,
+        lastOutboundAt: new Date(),
       },
     });
 

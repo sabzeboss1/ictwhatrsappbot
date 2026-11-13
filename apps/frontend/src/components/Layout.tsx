@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   AlertCircle,
   QrCode,
+  BellRing,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth-context';
 import { getSocket } from '../lib/socket';
@@ -100,6 +101,14 @@ export const Layout: React.FC = () => {
       label: 'Leads & Prospects',
       icon: Users,
       badge: null,
+      adminOnly: false,
+    },
+    {
+      to: '/followups',
+      label: 'Relances Clients',
+      icon: BellRing,
+      badge: 'Anti-Ban',
+      badgeColor: 'bg-emerald-500/20 text-emerald-400',
       adminOnly: false,
     },
     {

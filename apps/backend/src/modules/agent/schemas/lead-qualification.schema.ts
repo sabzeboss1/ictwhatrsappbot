@@ -37,6 +37,18 @@ export const LeadQualificationOutputSchema = z.object({
     return val;
   }, z.string().nullable().optional()),
   recommended_offer: z.string().nullable().optional(),
+  quoted_price: z.preprocess((val) => {
+    if (typeof val === 'number') return `${val.toLocaleString('fr-FR')} FCFA`;
+    return val;
+  }, z.string().nullable().optional()).catch(null),
+  estimated_amount: z.preprocess((val) => {
+    if (val === null || val === undefined || val === '') return null;
+    if (typeof val === 'string') {
+      const num = parseInt(val.replace(/\D/g, ''), 10);
+      return isNaN(num) ? null : num;
+    }
+    return val;
+  }, z.number().int().nonnegative().nullable().optional()).catch(null),
   product_identified: z.boolean().default(false),
   purchase_intent: z.enum(['information', 'interesse', 'demande_prix', 'veut_reserver']).catch('information'),
   availability_confirmed: z.boolean().default(false),

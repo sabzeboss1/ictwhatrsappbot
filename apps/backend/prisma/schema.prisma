@@ -26,6 +26,9 @@ model Lead {
   preferredDate         String?
   budget                String?
   recommendedOffer      String?
+  quotedPrice           String?   // Prix communiqué au prospect pour l'offre (ex: "75 000 FCFA / pers")
+  estimatedAmount       Int?      // Montant total estimé du deal en FCFA (pour tri, export, pipeline)
+  closingNotes          String?   // Notes internes du closer (jamais envoyées au prospect)
   productIdentified     Boolean   @default(false)
   purchaseIntent        String?   // information, interesse, demande_prix, veut_reserver
   availabilityConfirmed Boolean   @default(false)
@@ -44,11 +47,47 @@ model Lead {
   hubspotDealId         String?
   hubspotSyncStatus     String    @default("pending") // pending | synced | failed
   hubspotLastError      String?
+
+  // ── Module de relance ──
+  optOut                Boolean   @default(false) // Le prospect a demandé à ne plus être contacté (STOP)
+  optOutAt              DateTime?
+  followUpPaused        Boolean   @default(false) // Relances automatiques désactivées pour ce lead
+  followUpCount         Int       @default(0)     // Nb de relances auto envoyées depuis la dernière réponse du prospect
+  lastFollowUpAt        DateTime?
+  lastInboundAt         DateTime?
+  lastOutboundAt        DateTime?
+
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   messages              Message[]
+  followUps             FollowUp[]
   assignedAgent         User?     @relation(fields: [assignedAgentId], references: [id])
+}
+
+model FollowUp {
+  id            String    @id @default(cuid())
+  leadId        String
+  lead          Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type          String    @default("manual") // auto | manual
+  step          Int       @default(0)        // Rang de la relance automatique (1, 2, 3...)
+  status        String    @default("pending") // pending | sent | cancelled | failed | skipped
+  scheduledAt   DateTime
+  sentAt        DateTime?
+  message       String
+  error         String?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([leadId])
+}
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
 }
 
 model Message {

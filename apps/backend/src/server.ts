@@ -20,6 +20,8 @@ import { settingsRoutes } from './modules/settings/settings.controller.js';
 import { promptsRoutes } from './modules/settings/prompts.controller.js';
 import { catalogRoutes } from './modules/catalog/catalog.controller.js';
 import { catalogService } from './modules/catalog/catalog.service.js';
+import { followUpsRoutes } from './modules/followups/followups.controller.js';
+import { followUpsService } from './modules/followups/followups.service.js';
 
 const fastify = Fastify({
   bodyLimit: 35 * 1024 * 1024, // 35 Mo pour l'import de documents PDF de catalogues
@@ -77,6 +79,10 @@ async function bootstrap() {
     await fastify.register(settingsRoutes);
     await fastify.register(promptsRoutes);
     await fastify.register(catalogRoutes);
+    await fastify.register(followUpsRoutes);
+
+    // Démarrage du planificateur de relances
+    followUpsService.start();
 
     // Initialisation des catalogues et brochures PDF
     catalogService.ensureDefaultCatalogsExist();
@@ -173,6 +179,7 @@ const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
 signals.forEach((signal) => {
   process.on(signal, async () => {
     console.log(`\nArrêt du serveur (${signal})...`);
+    followUpsService.stop();
     await fastify.close();
     await prisma.$disconnect();
     process.exit(0);

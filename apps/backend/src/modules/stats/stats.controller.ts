@@ -52,12 +52,40 @@ export async function statsRoutes(fastify: FastifyInstance) {
             nextStep: true,
             customerType: true,
             recommendedOffer: true,
+            quotedPrice: true,
+            estimatedAmount: true,
+            participantsCount: true,
+            preferredDate: true,
             isB2B: true,
             isVip: true,
             updatedAt: true,
           },
         }),
       ]);
+
+      // Pipeline estimé et répartition par offre
+      const [pipelineAgg, byOfferRaw, pendingFollowUps] = await Promise.all([
+        prisma.lead.aggregate({
+          _sum: { estimatedAmount: true, participantsCount: true },
+        }),
+        prisma.lead.groupBy({
+          by: ['recommendedOffer'],
+          where: { recommendedOffer: { not: null } },
+          _count: { _all: true },
+          _sum: { estimatedAmount: true, participantsCount: true },
+        }),
+        prisma.followUp.count({ where: { status: 'pending' } }).catch(() => 0),
+      ]);
+
+      const byOffer = byOfferRaw
+        .map((r) => ({
+          offer: r.recommendedOffer || 'Non défini',
+          count: r._count._all,
+          amount: r._sum.estimatedAmount || 0,
+          participants: r._sum.participantsCount || 0,
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 6);
 
       // Calcul du taux de conversion (Clients ou Opportunités chaudes / Total)
       const convertedCount = await prisma.lead.count({
@@ -84,6 +112,10 @@ export async function statsRoutes(fastify: FastifyInstance) {
         todayMessages,
         conversionRate: parseFloat(conversionRate),
         recentAlerts: hotAlerts,
+        estimatedPipelineFcfa: pipelineAgg._sum.estimatedAmount || 0,
+        totalParticipants: pipelineAgg._sum.participantsCount || 0,
+        pendingFollowUps,
+        byOffer,
       });
     });
 

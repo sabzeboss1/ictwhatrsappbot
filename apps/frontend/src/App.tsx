@@ -8,6 +8,7 @@ import { Overview } from './pages/Overview';
 import { Conversations } from './pages/Conversations';
 import { Leads } from './pages/Leads';
 import { LeadDetail } from './pages/LeadDetail';
+import { FollowUps } from './pages/FollowUps';
 import { Settings } from './pages/Settings';
 import { Simulator } from './pages/Simulator';
 
@@ -65,6 +66,7 @@ export const App: React.FC = () => {
               <Route path="conversations" element={<Conversations />} />
               <Route path="leads" element={<Leads />} />
               <Route path="leads/:id" element={<LeadDetail />} />
+              <Route path="followups" element={<FollowUps />} />
               <Route path="simulator" element={<Simulator />} />
               <Route
                 path="settings"
