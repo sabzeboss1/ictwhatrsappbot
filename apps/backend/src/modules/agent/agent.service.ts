@@ -18,9 +18,18 @@ export class AgentService {
    * Cache du prompt actif pour éviter de requêter la DB à chaque message.
    * Invalidé manuellement via invalidatePromptCache() ou automatiquement toutes les 60s.
    */
-  private cachedPrompt: { prompt: string; version: string; name: string } | null = null;
+  private cachedPrompt: {
+    id?: string | null;
+    prompt: string;
+    version: string;
+    name: string;
+    slug?: string | null;
+    campaign?: string | null;
+    updatedAt?: Date | null;
+  } | null = null;
   private promptCacheTimestamp: number = 0;
-  private static PROMPT_CACHE_TTL_MS = 60_000; // 60 secondes
+  private promptSwitchCutoffMs: number = 0;
+  private static PROMPT_CACHE_TTL_MS = 10_000; // 10 secondes
 
   constructor() {
     if (env.OPENAI_API_KEY) {
@@ -32,37 +41,59 @@ export class AgentService {
   }
 
   /**
-   * Invalide le cache du prompt actif.
-   * Appelé après chaque modification de template depuis l'admin.
+   * Invalide le cache du prompt actif et enregistre l'horodatage de bascule
+   * pour empêcher les réponses générées par un ancien prompt désactivé de polluer le contexte.
    */
-  public invalidatePromptCache(): void {
+  public invalidatePromptCache(markSwitch = true): void {
     this.cachedPrompt = null;
     this.promptCacheTimestamp = 0;
+    if (markSwitch) {
+      this.promptSwitchCutoffMs = Date.now();
+    }
     console.log('[AgentService] Cache prompt invalidé');
+  }
+
+  public getPromptSwitchCutoffMs(): number {
+    return this.promptSwitchCutoffMs;
   }
 
   /**
    * Charge le prompt système actif depuis la base de données.
-   * Utilise un cache avec TTL de 60s et invalidation manuelle.
+   * Utilise un cache court (10s) et invalidation immédiate lors d'une modification admin.
    * Fallback: prompt hardcodé dans lead-qualification.ts
    */
-  public async getActivePrompt(): Promise<{ prompt: string; version: string; name: string }> {
-    // Vérifier le cache
+  public async getActivePrompt(): Promise<{
+    id?: string | null;
+    prompt: string;
+    version: string;
+    name: string;
+    slug?: string | null;
+    campaign?: string | null;
+    updatedAt?: Date | null;
+  }> {
     const now = Date.now();
-    if (this.cachedPrompt && (now - this.promptCacheTimestamp) < AgentService.PROMPT_CACHE_TTL_MS) {
+    if (this.cachedPrompt && now - this.promptCacheTimestamp < AgentService.PROMPT_CACHE_TTL_MS) {
       return this.cachedPrompt;
     }
 
     try {
       const activeTemplate = await prisma.promptTemplate.findFirst({
         where: { isActive: true },
+        orderBy: { updatedAt: 'desc' },
       });
 
       if (activeTemplate) {
+        if (this.cachedPrompt?.id && this.cachedPrompt.id !== activeTemplate.id) {
+          this.promptSwitchCutoffMs = Math.max(this.promptSwitchCutoffMs, activeTemplate.updatedAt.getTime());
+        }
         this.cachedPrompt = {
+          id: activeTemplate.id,
           prompt: activeTemplate.prompt,
           version: activeTemplate.version,
           name: activeTemplate.name,
+          slug: activeTemplate.slug,
+          campaign: activeTemplate.campaign,
+          updatedAt: activeTemplate.updatedAt,
         };
         this.promptCacheTimestamp = now;
         return this.cachedPrompt;
@@ -73,9 +104,13 @@ export class AgentService {
 
     // Fallback: prompt hardcodé
     const fallback = {
+      id: null,
       prompt: SYSTEM_PROMPT_LEAD_QUALIFICATION,
       version: PROMPT_VERSION,
       name: 'Prompt par défaut (hardcodé)',
+      slug: 'default-hardcoded',
+      campaign: null,
+      updatedAt: null,
     };
     this.cachedPrompt = fallback;
     this.promptCacheTimestamp = now;
@@ -176,7 +211,9 @@ export class AgentService {
     const systemPrompt = this.buildSystemPromptWithSchema(
       activePrompt.prompt,
       existingLeadData,
-      existingLeadData?.campaign
+      activePrompt.campaign || existingLeadData?.campaign,
+      activePrompt.slug,
+      activePrompt.name
     );
 
     // Filtrer l'historique pour éviter les doublons avec le message entrant
@@ -301,7 +338,13 @@ export class AgentService {
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
-        content: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData, existingLeadData?.campaign),
+        content: this.buildSystemPromptWithSchema(
+          activePrompt.prompt,
+          existingLeadData,
+          activePrompt.campaign || existingLeadData?.campaign,
+          activePrompt.slug,
+          activePrompt.name
+        ),
       },
       ...history.map((h) => ({
         role: h.role,
@@ -331,10 +374,16 @@ export class AgentService {
   private buildSystemPromptWithSchema(
     basePrompt: string,
     existingLeadData?: any,
-    campaignSlug?: string | null
+    campaignSlug?: string | null,
+    promptSlug?: string | null,
+    promptName?: string | null
   ): string {
-    // Injection dynamique en temps réel de tous les catalogues disponibles et de leurs règles
-    const dynamicCatalogContext = catalogService.generatePromptContext(campaignSlug);
+    // Injection dynamique uniquement des catalogues compatibles avec le prompt actif
+    const dynamicCatalogContext = catalogService.generatePromptContext(
+      campaignSlug,
+      promptSlug,
+      basePrompt
+    );
 
     // Extraction épurée des données pertinentes du lead (sans métadonnées internes)
     const isLidAccount = existingLeadData?.phone?.includes('@lid') && !existingLeadData?.realPhone;
@@ -357,7 +406,14 @@ export class AgentService {
         }
       : {};
 
-    return `${basePrompt}
+    return `══════════════════════════════════════════════════════════════
+PROMPT SYSTÈME ACTIF : "${promptName || 'Prompt Principal'}"
+RÈGLE D'ISOLATION STRICTE DES PROMPTS :
+- Tu dois obéir EXCLUSIVEMENT aux consignes, tarifs et offres définis dans CE prompt actif ci-dessous.
+- Si l'historique des messages précédents ou les données antérieures du prospect mentionnent d'anciennes offres, d'anciens tarifs ou un ancien comportement provenant d'un prompt désormais DÉSACTIVÉ, tu dois les IGNORER totalement et appliquer uniquement les instructions du présent prompt actif.
+══════════════════════════════════════════════════════════════
+
+${basePrompt}
 
 ══════════════════════════════════════════════════════════════
 ${dynamicCatalogContext}
@@ -500,7 +556,13 @@ Structure JSON exacte requise :
         response = await this.anthropicClient.messages.create({
           model: m,
           max_tokens: 1024,
-          system: this.buildSystemPromptWithSchema(activePrompt.prompt, existingLeadData, existingLeadData?.campaign),
+          system: this.buildSystemPromptWithSchema(
+            activePrompt.prompt,
+            existingLeadData,
+            activePrompt.campaign || existingLeadData?.campaign,
+            activePrompt.slug,
+            activePrompt.name
+          ),
           messages: rawMessages,
         });
         if (response && response.content?.[0]) {

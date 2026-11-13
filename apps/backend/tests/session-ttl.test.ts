@@ -112,4 +112,36 @@ describe('Session TTL & Anti-Blocking Context Reset', () => {
     expect(activeHistory).toHaveLength(1);
     expect(activeHistory[0].content).toBe('Voici nos tarifs.');
   });
+
+  it('should ignore messages generated before a prompt switch or manual reset', async () => {
+    const { agentService } = await import('../src/modules/agent/agent.service.js');
+    const leadId = 'test-lead-prompt-switch';
+    const now = Date.now();
+
+    const mockMessages = [
+      {
+        id: 'msg-after',
+        leadId,
+        direction: 'inbound',
+        content: 'Bonjour, je veux des infos sur le nouveau programme',
+        messageType: 'text',
+        createdAt: new Date(now + 2000),
+      },
+      {
+        id: 'msg-before',
+        leadId,
+        direction: 'outbound',
+        content: 'Ancienne réponse issue du prompt désactivé',
+        messageType: 'text',
+        createdAt: new Date(now - 5000),
+      },
+    ];
+
+    agentService.invalidatePromptCache(true); // Définit promptSwitchCutoffMs = Date.now()
+    vi.spyOn(prisma.message, 'findMany').mockResolvedValueOnce(mockMessages as any);
+
+    const activeHistory = await whatsAppService.getActiveSessionMessages(leadId);
+    expect(activeHistory).toHaveLength(1);
+    expect(activeHistory[0].content).toContain('nouveau programme');
+  });
 });

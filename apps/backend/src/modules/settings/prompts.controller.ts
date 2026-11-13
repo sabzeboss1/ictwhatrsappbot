@@ -120,11 +120,19 @@ export async function promptsRoutes(fastify: FastifyInstance) {
         prompt?: string;
         campaign?: string;
         version?: string;
+        isActive?: boolean;
       };
 
       const existing = await prisma.promptTemplate.findUnique({ where: { id } });
       if (!existing) {
         return reply.status(404).send({ error: 'Template introuvable.' });
+      }
+
+      if (body.isActive === true) {
+        await prisma.promptTemplate.updateMany({
+          where: { isActive: true, id: { not: id } },
+          data: { isActive: false },
+        });
       }
 
       const updated = await prisma.promptTemplate.update({
@@ -135,13 +143,12 @@ export async function promptsRoutes(fastify: FastifyInstance) {
           prompt: body.prompt ?? existing.prompt,
           campaign: body.campaign !== undefined ? body.campaign : existing.campaign,
           version: body.version || incrementVersion(existing.version),
+          ...(body.isActive !== undefined ? { isActive: Boolean(body.isActive) } : {}),
         },
       });
 
-      // Invalider le cache si c'est le template actif
-      if (updated.isActive) {
-        agentService.invalidatePromptCache();
-      }
+      // Toujours invalider le cache prompt de l'agent
+      agentService.invalidatePromptCache(true);
 
       // Audit log
       await prisma.auditLog.create({
@@ -149,7 +156,7 @@ export async function promptsRoutes(fastify: FastifyInstance) {
           actorId: request.user?.userId,
           action: 'prompt.updated',
           entityId: id,
-          metadata: JSON.stringify({ name: updated.name, version: updated.version }),
+          metadata: JSON.stringify({ name: updated.name, version: updated.version, isActive: updated.isActive }),
         },
       });
 
@@ -157,10 +164,11 @@ export async function promptsRoutes(fastify: FastifyInstance) {
     });
 
     // ═══════════════════════════════════════════════════════════
-    // PUT /api/prompts/:id/activate — Activer un template
+    // PUT /api/prompts/:id/activate — Activer un template (et sauvegarder éventuellement les modifications en cours)
     // ═══════════════════════════════════════════════════════════
     adminRoutes.put('/api/prompts/:id/activate', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       const { id } = request.params;
+      const body = (request.body as { name?: string; description?: string | null; prompt?: string; campaign?: string | null }) || {};
 
       const existing = await prisma.promptTemplate.findUnique({ where: { id } });
       if (!existing) {
@@ -173,14 +181,20 @@ export async function promptsRoutes(fastify: FastifyInstance) {
         data: { isActive: false },
       });
 
-      // Activer celui-ci
+      // Activer celui-ci (et appliquer le texte modifié s'il est transmis)
       const activated = await prisma.promptTemplate.update({
         where: { id },
-        data: { isActive: true },
+        data: {
+          isActive: true,
+          ...(body.name ? { name: body.name } : {}),
+          ...(body.description !== undefined ? { description: body.description } : {}),
+          ...(body.prompt ? { prompt: body.prompt } : {}),
+          ...(body.campaign !== undefined ? { campaign: body.campaign } : {}),
+        },
       });
 
-      // Invalider le cache prompt de l'agent
-      agentService.invalidatePromptCache();
+      // Invalider le cache prompt de l'agent et marquer la coupure de contexte
+      agentService.invalidatePromptCache(true);
 
       // Audit log
       await prisma.auditLog.create({
@@ -193,6 +207,54 @@ export async function promptsRoutes(fastify: FastifyInstance) {
       });
 
       return reply.send({ success: true, template: activated });
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // PUT /api/prompts/:id/deactivate — Désactiver un template (revient au template par défaut)
+    // ═══════════════════════════════════════════════════════════
+    adminRoutes.put('/api/prompts/:id/deactivate', async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+      const { id } = request.params;
+
+      const existing = await prisma.promptTemplate.findUnique({ where: { id } });
+      if (!existing) {
+        return reply.status(404).send({ error: 'Template introuvable.' });
+      }
+
+      await prisma.promptTemplate.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      // Activer un autre template par défaut s'il en existe un différent
+      const fallbackTemplate = await prisma.promptTemplate.findFirst({
+        where: { id: { not: id } },
+        orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }],
+      });
+
+      let newActive = null;
+      if (fallbackTemplate) {
+        newActive = await prisma.promptTemplate.update({
+          where: { id: fallbackTemplate.id },
+          data: { isActive: true },
+        });
+      }
+
+      agentService.invalidatePromptCache(true);
+
+      await prisma.auditLog.create({
+        data: {
+          actorId: request.user?.userId,
+          action: 'prompt.deactivated',
+          entityId: id,
+          metadata: JSON.stringify({ deactivated: existing.name, activeFallback: newActive?.name || null }),
+        },
+      });
+
+      return reply.send({
+        success: true,
+        deactivated: existing,
+        activeTemplate: newActive,
+      });
     });
 
     // ═══════════════════════════════════════════════════════════

@@ -335,6 +335,19 @@ export class LeadsService {
       },
     });
 
+    // Créer un marqueur de réinitialisation dans l'historique pour que getActiveSessionMessages ignore tous les messages antérieurs
+    await prisma.message
+      .create({
+        data: {
+          leadId: id,
+          direction: 'outbound',
+          content: '🔄 Conversation réinitialisée depuis le tableau de bord.',
+          messageType: 'system',
+          sentByAgentId: actorId || null,
+        },
+      })
+      .catch(() => undefined);
+
     emitLeadUpdated(updated);
     return updated;
   }

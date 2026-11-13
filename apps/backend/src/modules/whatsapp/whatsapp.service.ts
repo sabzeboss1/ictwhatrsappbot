@@ -594,17 +594,26 @@ export class WhatsAppService {
 
     if (recentMessages.length === 0) return [];
 
-    // Détecter la coupure d'inactivité de session
+    // Détecter la coupure d'inactivité de session OU un changement récent de prompt actif / reset
     const sessionMessages: typeof recentMessages = [];
     let previousTime = Date.now();
+    const promptCutoffMs = agentService.getPromptSwitchCutoffMs();
 
     for (const msg of recentMessages) {
       const msgTime = msg.createdAt.getTime();
+      // Si un nouveau prompt a été activé après ce message, ignorer les anciens messages générés par le prompt désactivé
+      if (promptCutoffMs > 0 && msgTime < promptCutoffMs) {
+        break;
+      }
       // Si l'écart temporel entre deux messages consécutifs dépasse le TTL, on coupe
       if (previousTime - msgTime > ttlMs && sessionMessages.length > 0) {
         break;
       }
       sessionMessages.push(msg);
+      // Si on rencontre un message de réinitialisation ("Conversation réinitialisée"), on ne remonte pas avant
+      if (msg.direction === 'outbound' && msg.content.includes('Conversation réinitialisée')) {
+        break;
+      }
       previousTime = msgTime;
     }
 
@@ -647,20 +656,25 @@ export class WhatsAppService {
       `[WhatsAppService] 🧠 Traitement IA pour ${phone} — Historique session active: ${history.length} messages (TTL: ${env.SESSION_TTL_MINUTES || 120} min)`
     );
 
-    // Nouvelle session après inactivité : on masque à l'IA les critères de l'ancienne session
-    // (ils restent en base et seront conservés si l'IA ne les remplace pas).
-    const leadContextForAI = freshSession
-      ? {
-          ...lead,
-          need: null,
-          recommendedOffer: null,
-          quotedPrice: null,
-          estimatedAmount: null,
-          preferredDate: null,
-          participantsCount: null,
-          budget: null,
-        }
-      : lead;
+    // Nouvelle session après inactivité OU après un changement de prompt actif :
+    // on masque à l'IA les critères de l'ancienne session/prompt pour éviter tout mélange entre prompt activé et désactivé.
+    const promptCutoffMs = agentService.getPromptSwitchCutoffMs();
+    const hadPromptSwitchSinceLastUpdate =
+      promptCutoffMs > 0 && lead.updatedAt && lead.updatedAt.getTime() < promptCutoffMs;
+
+    const leadContextForAI =
+      freshSession || hadPromptSwitchSinceLastUpdate || history.length === 0
+        ? {
+            ...lead,
+            need: null,
+            recommendedOffer: null,
+            quotedPrice: null,
+            estimatedAmount: null,
+            preferredDate: null,
+            participantsCount: null,
+            budget: null,
+          }
+        : lead;
 
     // Appel Agent IA
     const aiOutput = await agentService.qualifyMessage({

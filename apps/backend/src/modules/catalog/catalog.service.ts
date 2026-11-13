@@ -477,15 +477,51 @@ export class CatalogService {
    * L'IA connaît ainsi tous les catalogues créés par l'admin et leurs règles.
    * ══════════════════════════════════════════════════════════════════════
    */
-  public generatePromptContext(campaignFilter?: string | null): string {
+  public generatePromptContext(
+    campaignFilter?: string | null,
+    promptSlug?: string | null,
+    promptText?: string | null
+  ): string {
     const all = this.listCatalogs();
     if (all.length === 0) return '';
 
-    // Si une campagne est spécifiée, prioriser les catalogues liés à cette campagne
+    const normalizedFilter = (campaignFilter || '').trim().toLowerCase();
+    const normalizedSlug = (promptSlug || '').trim().toLowerCase();
+    const normalizedPrompt = (promptText || '').toLowerCase();
+    const isCustomCampaignPrompt = Boolean(
+      (normalizedFilter && normalizedFilter !== 'general') ||
+        (normalizedSlug && normalizedSlug !== 'ict-tourisme-principal' && normalizedSlug !== 'default-hardcoded')
+    );
+
+    // Filtrer strictement les catalogues pour ne JAMAIS injecter les brochures d'un prompt/campagne désactivé(e)
     const relevant = all.filter((c) => {
-      if (!campaignFilter) return true;
-      return !c.campaign || c.campaign === campaignFilter || c.isDefault;
+      const catCampaign = (c.campaign || c.campaignSlug || '').trim().toLowerCase();
+
+      // 1. Si le catalogue est rattaché à une campagne précise, il ne doit être injecté
+      //    QUE si le prompt actif correspond à cette campagne ou ce slug
+      if (catCampaign) {
+        return catCampaign === normalizedFilter || catCampaign === normalizedSlug;
+      }
+
+      // 2. Si l'admin a activé un prompt de campagne spécifique (autre que le prompt général),
+      //    ne garder que le catalogue général par défaut ou les brochures explicitement citées dans le texte du prompt actif
+      if (isCustomCampaignPrompt && normalizedPrompt) {
+        if (c.isDefault) return true;
+        const catKey = (c.category || '').toLowerCase();
+        const titleWords = c.title
+          .toLowerCase()
+          .split(/[^a-z0-9éèêàùç]+/)
+          .filter((w) => w.length >= 5 && !['brochure', 'catalogue', 'officiel', 'sejour', 'excursion'].includes(w));
+        const mentionedInPrompt =
+          (catKey && catKey !== 'general' && normalizedPrompt.includes(catKey)) ||
+          titleWords.some((w) => normalizedPrompt.includes(w));
+        return mentionedInPrompt;
+      }
+
+      return true;
     });
+
+    if (relevant.length === 0) return '';
 
     const lines: string[] = [
       'CATALOGUES ET BROCHURES PDF DISPONIBLES :',

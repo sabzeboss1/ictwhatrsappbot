@@ -216,16 +216,50 @@ export const Settings: React.FC = () => {
 
   const activateMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await api.put(`/api/prompts/${id}/activate`);
+      // Sauvegarder également le contenu en cours d'édition lors de l'activation
+      const payload =
+        id === selectedTemplateId
+          ? {
+              name: editedName,
+              description: editedDescription || null,
+              prompt: editedPrompt,
+              campaign: editedCampaign || null,
+            }
+          : {};
+      const res = await api.put(`/api/prompts/${id}/activate`, payload);
       return res.data;
     },
     onSuccess: (data) => {
-      setPromptMsg({ type: 'success', text: `✓ Template "${data.template.name}" activé — le bot utilise maintenant ce prompt !` });
+      setPromptMsg({
+        type: 'success',
+        text: `✓ Template "${data.template.name}" sauvegardé et activé — tous les autres prompts sont désactivés !`,
+      });
       queryClient.invalidateQueries({ queryKey: ['prompt-templates'] });
       setTimeout(() => setPromptMsg(null), 4000);
     },
     onError: (err: any) => {
-      setPromptMsg({ type: 'error', text: err.response?.data?.error || 'Erreur lors de l\'activation' });
+      setPromptMsg({ type: 'error', text: err.response?.data?.error || "Erreur lors de l'activation" });
+    },
+  });
+
+  const deactivateMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.put(`/api/prompts/${id}/deactivate`);
+      return res.data;
+    },
+    onSuccess: (data) => {
+      const fb = data.activeTemplate?.name
+        ? ` — bascule sur "${data.activeTemplate.name}"`
+        : '';
+      setPromptMsg({
+        type: 'success',
+        text: `✓ Template "${data.deactivated?.name || ''}" désactivé${fb}.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ['prompt-templates'] });
+      setTimeout(() => setPromptMsg(null), 4000);
+    },
+    onError: (err: any) => {
+      setPromptMsg({ type: 'error', text: err.response?.data?.error || 'Erreur lors de la désactivation' });
     },
   });
 
@@ -935,16 +969,27 @@ export const Settings: React.FC = () => {
                     <span>Sauvegarder</span>
                   </button>
 
-                  {/* Activer */}
-                  {!selectedTemplate.isActive && (
+                  {/* Activer / Désactiver */}
+                  {!selectedTemplate.isActive ? (
                     <button
                       onClick={() => activateMutation.mutate(selectedTemplate.id)}
                       disabled={activateMutation.isPending}
-                      className="flex items-center gap-1.5 bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 border border-violet-500/40 px-3 py-2 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+                      className="flex items-center gap-1.5 bg-violet-500 hover:bg-violet-400 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-colors disabled:opacity-50 shadow-lg shadow-violet-500/20"
                     >
                       {activateMutation.isPending ? <RotateCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                      <span>Activer ce template</span>
+                      <span>Sauvegarder & Activer ce prompt</span>
                     </button>
+                  ) : (
+                    (promptTemplates?.length || 0) > 1 && (
+                      <button
+                        onClick={() => deactivateMutation.mutate(selectedTemplate.id)}
+                        disabled={deactivateMutation.isPending}
+                        className="flex items-center gap-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 px-3 py-2 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50"
+                      >
+                        {deactivateMutation.isPending ? <RotateCw className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+                        <span>Désactiver ce prompt</span>
+                      </button>
+                    )
                   )}
 
                   {/* Dupliquer */}
