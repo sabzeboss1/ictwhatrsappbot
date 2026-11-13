@@ -116,7 +116,7 @@ export const Settings: React.FC = () => {
 
   // État Configuration Clé API Gemini / IA
   const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('');
-  const [geminiModelInput, setGeminiModelInput] = useState('gemini-2.5-flash');
+  const [geminiModelInput, setGeminiModelInput] = useState('gemini-3.5-flash-lite');
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [aiConfigMsg, setAiConfigMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -136,7 +136,13 @@ export const Settings: React.FC = () => {
 
   useEffect(() => {
     if (aiConfig?.geminiModel) {
-      setGeminiModelInput(aiConfig.geminiModel);
+      const m = aiConfig.geminiModel;
+      // Basculer automatiquement sur gemini-3.5-flash-lite si un ancien modèle 2.x déprécié était en mémoire
+      if (m.startsWith('gemini-2.')) {
+        setGeminiModelInput('gemini-3.5-flash-lite');
+      } else {
+        setGeminiModelInput(m);
+      }
     }
   }, [aiConfig?.geminiModel]);
 
@@ -153,7 +159,7 @@ export const Settings: React.FC = () => {
       setGeminiApiKeyInput('');
       setAiConfigMsg({
         type: 'success',
-        text: `✓ ${data.message || 'Clé Gemini mise à jour'} (${data.maskedGeminiKey || 'active'})`,
+        text: `✓ ${data.message || 'Clé Gemini mise à jour'} (${data.maskedGeminiKey || 'active'}) — Modèle : ${data.geminiModel}`,
       });
       refetchAiConfig();
       queryClient.invalidateQueries({ queryKey: ['settings-health'] });
@@ -176,6 +182,7 @@ export const Settings: React.FC = () => {
     },
     onSuccess: (data) => {
       if (data.ok) {
+        if (data.model) setGeminiModelInput(data.model);
         setAiConfigMsg({
           type: 'success',
           text: `✓ Clé Gemini valide et opérationnelle sur "${data.model}" (${data.latencyMs} ms) — Réponse : "${data.reply}"`,
@@ -912,10 +919,14 @@ export const Settings: React.FC = () => {
               onChange={(e) => setGeminiModelInput(e.target.value)}
               className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white focus:outline-none focus:border-emerald-500"
             >
-              <option value="gemini-2.5-flash">gemini-2.5-flash (Recommandé)</option>
-              <option value="gemini-2.0-flash">gemini-2.0-flash (Rapide & Stable)</option>
-              <option value="gemini-flash-latest">gemini-flash-latest (Auto)</option>
-              <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (Économique)</option>
+              <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Recommandé Google AI Studio)</option>
+              <option value="gemini-3.8-flash">gemini-3.8-flash (Gemini 3.8 Flash — Dernière génération)</option>
+              <option value="gemini-3.6-flash">gemini-3.6-flash (Gemini 3.6 Flash — Rapide & Polyvalent)</option>
+              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Gemini 3.1 Flash-Lite)</option>
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Gemini 3.1 Pro)</option>
+              <option value="gemini-omni-1.2-flash">gemini-omni-1.2-flash (Gemini Omni Flash)</option>
+              <option value="gemini-flash-latest">gemini-flash-latest (Auto-alias Google)</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash (Ancien compte uniquement)</option>
             </select>
           </div>
         </div>

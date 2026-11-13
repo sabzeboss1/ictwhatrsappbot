@@ -87,7 +87,82 @@ export class AgentService {
   }
 
   /**
-   * Teste en direct une clé API Google Gemini avec bascule de modèles si nécessaire.
+   * Liste ordonnée des modèles Gemini candidats (priorité aux modèles Gemini 3.x actuels de Google AI Studio).
+   */
+  public getCandidateGeminiModels(preferredModel?: string): string[] {
+    const cleanPref = preferredModel?.trim().replace(/^models\//, '');
+    const envModel = env.GEMINI_MODEL?.trim().replace(/^models\//, '');
+
+    // Si l'environnement pointait encore sur un ancien modèle 2.x déprécié pour les nouveaux comptes,
+    // placer les modèles 3.x en tête pour éviter les 404 inutiles.
+    const isDeprecated2x = (m?: string) => Boolean(m && /^gemini-2\./.test(m));
+
+    return Array.from(
+      new Set(
+        [
+          !isDeprecated2x(cleanPref) ? cleanPref : undefined,
+          !isDeprecated2x(envModel) ? envModel : undefined,
+          'gemini-3.5-flash-lite',
+          'gemini-3.8-flash',
+          'gemini-3.6-flash',
+          'gemini-3.1-flash-lite',
+          'gemini-flash-latest',
+          'gemini-flash-lite-latest',
+          'gemini-3.1-pro-preview',
+          'gemini-omni-1.2-flash',
+          cleanPref,
+          envModel,
+          'gemini-2.5-flash',
+          'gemini-2.5-flash-lite',
+        ].filter(Boolean) as string[]
+      )
+    );
+  }
+
+  /**
+   * Interroge directement l'API Google AI Studio (GET /v1beta/models) pour découvrir
+   * les modèles supportant generateContent disponibles sur cette clé API.
+   */
+  private async discoverAvailableGeminiModels(apiKey: string): Promise<string[]> {
+    try {
+      const res = await axios.get(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+        { timeout: 8000 }
+      );
+      const models: any[] = res.data?.models || [];
+      const compatible = models
+        .filter((m) => {
+          const methods: string[] = m.supportedGenerationMethods || [];
+          const name = String(m.name || '').toLowerCase();
+          return (
+            methods.includes('generateContent') &&
+            !name.includes('tts') &&
+            !name.includes('image') &&
+            !name.includes('transcribe') &&
+            !name.includes('embedding') &&
+            !name.includes('live')
+          );
+        })
+        .map((m) => String(m.name).replace(/^models\//, ''));
+
+      // Prioriser les modèles flash / flash-lite
+      compatible.sort((a, b) => {
+        const score = (s: string) =>
+          s.includes('3.8-flash') ? 0 :
+          s.includes('3.6-flash') ? 1 :
+          s.includes('3.5-flash-lite') ? 2 :
+          s.includes('3.1-flash-lite') ? 3 :
+          s.includes('flash') ? 4 : 5;
+        return score(a) - score(b);
+      });
+      return compatible;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Teste en direct une clé API Google Gemini avec bascule de modèles et auto-découverte si nécessaire.
    */
   public async testGeminiConnection(apiKeyOverride?: string, modelOverride?: string): Promise<{
     ok: boolean;
@@ -102,32 +177,29 @@ export class AgentService {
       return { ok: false, latencyMs: 0, error: 'Aucune clé API Gemini fournie.' };
     }
 
-    const modelsToTry = Array.from(
-      new Set(
-        [
-          modelOverride?.trim(),
-          env.GEMINI_MODEL,
-          'gemini-2.5-flash',
-          'gemini-2.0-flash',
-          'gemini-flash-latest',
-          'gemini-2.5-flash-lite',
-        ].filter(Boolean) as string[]
-      )
-    );
+    const modelsToTry = this.getCandidateGeminiModels(modelOverride);
 
     let lastErr = 'Erreur inconnue';
+    let saw404 = false;
+
+    const tryModel = async (model: string) => {
+      const res = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          contents: [{ role: 'user', parts: [{ text: 'Réponds uniquement : Connexion Gemini OK 🇨🇲' }] }],
+          generationConfig: { maxOutputTokens: 30, temperature: 0.1 },
+        },
+        { headers: { 'Content-Type': 'application/json' }, timeout: 12000 }
+      );
+      return res.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() as string | undefined;
+    };
+
     for (const model of modelsToTry) {
       try {
-        const res = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            contents: [{ role: 'user', parts: [{ text: 'Réponds uniquement : Connexion Gemini OK 🇨🇲' }] }],
-            generationConfig: { maxOutputTokens: 30, temperature: 0.1 },
-          },
-          { headers: { 'Content-Type': 'application/json' }, timeout: 12000 }
-        );
-        const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        const text = await tryModel(model);
         if (text) {
+          // Mémoriser automatiquement le modèle fonctionnel
+          env.GEMINI_MODEL = model;
           return {
             ok: true,
             model,
@@ -139,9 +211,36 @@ export class AgentService {
         const status = err.response?.status;
         const apiMessage = err.response?.data?.error?.message || err.message;
         lastErr = status ? `HTTP ${status} — ${apiMessage}` : apiMessage;
-        // Si la clé est invalide (400 API_KEY_INVALID ou 403), inutile d'essayer d'autres modèles
-        if (status === 400 || status === 401 || status === 403) {
+        if (status === 404) {
+          saw404 = true;
+        }
+        // Si la clé elle-même est invalide (400 API_KEY_INVALID ou 401/403), inutile d'essayer d'autres modèles
+        if ((status === 400 && String(apiMessage).toLowerCase().includes('api key')) || status === 401 || status === 403) {
           break;
+        }
+      }
+    }
+
+    // Si les modèles connus ont renvoyé 404, interroger la liste officielle des modèles du compte Google AI Studio
+    if (saw404) {
+      const discovered = await this.discoverAvailableGeminiModels(apiKey);
+      for (const model of discovered) {
+        if (modelsToTry.includes(model)) continue;
+        try {
+          const text = await tryModel(model);
+          if (text) {
+            env.GEMINI_MODEL = model;
+            return {
+              ok: true,
+              model,
+              latencyMs: Date.now() - start,
+              reply: text,
+            };
+          }
+        } catch (err: any) {
+          const status = err.response?.status;
+          const apiMessage = err.response?.data?.error?.message || err.message;
+          lastErr = status ? `HTTP ${status} — ${apiMessage}` : apiMessage;
         }
       }
     }
@@ -382,39 +481,36 @@ export class AgentService {
       },
     };
 
-    // Modèles candidats ordonnés avec bascule automatique
-    const candidateModels = Array.from(
-      new Set(
-        [
-          env.GEMINI_MODEL,
-          'gemini-flash-latest',
-          'gemini-flash-lite-latest',
-          'gemini-2.5-flash',
-          'gemini-2.5-flash-lite',
-          'gemini-2.0-flash',
-          'gemini-2.0-flash-lite',
-        ].filter(Boolean) as string[]
-      )
-    );
+    // Modèles candidats ordonnés avec bascule automatique (Gemini 3.x en tête)
+    const candidateModels = this.getCandidateGeminiModels();
 
     let rawText: string | null = null;
     let lastError: any = null;
+    let saw404 = false;
+
+    const tryGenerateWithModel = async (model: string): Promise<string | null> => {
+      console.log(`[AgentService] Tentative Gemini avec modèle: ${model}...`);
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+        payload,
+        {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 20000,
+        }
+      );
+      const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        console.log(`✓ [AgentService] Réponse Gemini générée avec succès via ${model} !`);
+        env.GEMINI_MODEL = model;
+        return text;
+      }
+      return null;
+    };
 
     for (const model of candidateModels) {
       try {
-        console.log(`[AgentService] Tentative Gemini avec modèle: ${model}...`);
-        const response = await axios.post(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
-          payload,
-          {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 20000,
-          }
-        );
-
-        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const text = await tryGenerateWithModel(model);
         if (text) {
-          console.log(`✓ [AgentService] Réponse Gemini générée avec succès via ${model} !`);
           rawText = text;
           break;
         }
@@ -422,7 +518,24 @@ export class AgentService {
         lastError = err;
         const status = err.response?.status;
         const msg = err.response?.data?.error?.message || err.message;
+        if (status === 404) saw404 = true;
         console.warn(`[AgentService] Modèle Gemini ${model} indisponible (HTTP ${status || 'ERR'}: ${msg?.slice(0, 80)}...). Essai modèle suivant...`);
+      }
+    }
+
+    if (!rawText && saw404) {
+      const discovered = await this.discoverAvailableGeminiModels(env.GEMINI_API_KEY);
+      for (const model of discovered) {
+        if (candidateModels.includes(model)) continue;
+        try {
+          const text = await tryGenerateWithModel(model);
+          if (text) {
+            rawText = text;
+            break;
+          }
+        } catch (err: any) {
+          lastError = err;
+        }
       }
     }
 

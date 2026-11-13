@@ -57,7 +57,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
       return reply.send({
         aiProvider: env.AI_PROVIDER || 'gemini',
-        geminiModel: env.GEMINI_MODEL || 'gemini-flash-latest',
+        geminiModel: env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
         hasGeminiKey,
         maskedGeminiKey: maskApiKey(env.GEMINI_API_KEY),
         hasOpenaiKey,
@@ -95,7 +95,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
       const nextConfig = {
         aiProvider: body.aiProvider || currentVal.aiProvider || env.AI_PROVIDER || 'gemini',
         geminiApiKey: isNewGeminiKey ? body.geminiApiKey!.trim() : currentVal.geminiApiKey || env.GEMINI_API_KEY || '',
-        geminiModel: (body.geminiModel || currentVal.geminiModel || env.GEMINI_MODEL || 'gemini-flash-latest').trim(),
+        geminiModel: (body.geminiModel || currentVal.geminiModel || env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim(),
         openaiApiKey:
           typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim() && !body.openaiApiKey.includes('••••')
             ? body.openaiApiKey.trim()
