@@ -62,7 +62,43 @@ model Lead {
 
   messages              Message[]
   followUps             FollowUp[]
+  commercialRequests    CommercialRequest[]
   assignedAgent         User?     @relation(fields: [assignedAgentId], references: [id])
+}
+
+model CommercialRequest {
+  id                 String    @id @default(cuid())
+  requestKey         String    @unique // Clé stable unique d'une demande commerciale (ex: req_<leadId>_<seq>)
+  reference          String    @unique // Référence interne non sensible utilisée dans dealname ("Demande WhatsApp - <reference>")
+  leadId             String
+  lead               Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  hubspotContactId   String?
+  hubspotDealId      String?   @unique
+  pipelineId         String    @default("4352514296")
+  requestedStage     String    @default("NOUVELLE_DEMANDE") // Clé d'étape demandée (NOUVELLE_DEMANDE..PERDUE)
+  syncedStage        String?   // Clé d'étape effectivement synchronisée dans HubSpot
+  remoteStageId      String?   // Dernier ID d'étape observé dans HubSpot (détection modification manuelle)
+  syncStatus         String    @default("pending") // pending | creating | uncertain_creation | synced | retry_scheduled | failed_permanent | manual_override | simulated
+  attempts           Int       @default(0)
+  nextRetryAt        DateTime?
+  lastError          String?
+  lastCorrelationId  String?
+  lockedBy           String?
+  lockedUntil        DateTime?
+  paymentVerified    Boolean   @default(false)
+  paymentVerifiedBy  String?
+  paymentVerifiedAt  DateTime?
+  paymentReference   String?
+  bookingConfirmed   Boolean   @default(false)
+  offerSentAt        DateTime?
+  isTest             Boolean   @default(false)
+  lastEventAt        DateTime  @default(now())
+  lastSyncedAt       DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([leadId, createdAt])
+  @@index([syncStatus, nextRetryAt])
 }
 
 model FollowUp {

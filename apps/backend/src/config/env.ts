@@ -27,7 +27,9 @@ const envSchema = z.object({
 
   // HubSpot
   HUBSPOT_ACCESS_TOKEN: z.string().optional().default(''),
-  HUBSPOT_PIPELINE_ID: z.string().default('default'),
+  HUBSPOT_PIPELINE_ID: z.string().default('4352514296'),
+  HUBSPOT_PIPELINE_SYNC_ENABLED: z.string().default('false'),
+  HUBSPOT_DRY_RUN: z.string().default('false'),
 
   // Session & Mémoire IA
   SESSION_TTL_MINUTES: z.coerce.number().default(120), // 120 minutes (2 heures) d'inactivité avant réinitialisation automatique

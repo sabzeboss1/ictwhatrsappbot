@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { authenticate, requireRole } from '../../plugins/auth.js';
 import { agentService } from '../agent/agent.service.js';
+import { hubspotPipelineService, PIPELINE_ID, ETAPES } from '../hubspot/hubspot.pipeline.js';
 import { env } from '../../config/env.js';
 import { prisma } from '../../plugins/prisma.js';
 
@@ -164,6 +165,20 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         body.geminiApiKey && !body.geminiApiKey.includes('••••') ? body.geminiApiKey.trim() : undefined;
       const result = await agentService.testGeminiConnection(keyToTest, body.geminiModel);
       return reply.send(result);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // GET /api/settings/hubspot-pipeline/verify — Vérification en LECTURE SEULE du pipeline 4352514296 et de ses 7 étapes
+    // ═══════════════════════════════════════════════════════════
+    adminRoutes.get('/api/settings/hubspot-pipeline/verify', async (_request: FastifyRequest, reply: FastifyReply) => {
+      const verification = await hubspotPipelineService.verifyPipelineConfiguration(true);
+      return reply.send({
+        ...verification,
+        expectedPipelineId: PIPELINE_ID,
+        expectedStages: ETAPES,
+        syncEnabled: hubspotPipelineService.isPipelineSyncEnabled(),
+        dryRun: hubspotPipelineService.isDryRunMode(),
+      });
     });
 
     // Bilan de santé des connexions (Evolution API, HubSpot, Base de données, IA)

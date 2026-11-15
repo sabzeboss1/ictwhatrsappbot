@@ -3,6 +3,7 @@ import { authenticate } from '../../plugins/auth.js';
 import { leadsService } from './leads.service.js';
 import { buildCsv, buildXlsx } from './leads.export.js';
 import { prisma } from '../../plugins/prisma.js';
+import { hubspotPipelineService } from '../hubspot/hubspot.pipeline.js';
 
 export async function leadsRoutes(fastify: FastifyInstance) {
   fastify.register(async (protectedRoutes) => {
@@ -183,6 +184,83 @@ export async function leadsRoutes(fastify: FastifyInstance) {
       async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
         const result = await leadsService.resetLead(request.params.id, request.user?.userId);
         return reply.send(result);
+      }
+    );
+
+    // Transition d'étape ou validation humaine de réservation/paiement dans le pipeline HubSpot (4352514296)
+    protectedRoutes.post(
+      '/api/leads/:id/pipeline-stage',
+      async (
+        request: FastifyRequest<{
+          Params: { id: string };
+          Body: {
+            stage: string;
+            requestKey?: string;
+            paymentVerified?: boolean;
+            paymentReference?: string;
+            bookingConfirmed?: boolean;
+            allowReopen?: boolean;
+            allowTerminalOverride?: boolean;
+            forceNewProject?: boolean;
+            isTest?: boolean;
+          };
+        }>,
+        reply: FastifyReply
+      ) => {
+        const lead = await prisma.lead.findUnique({ where: { id: request.params.id } });
+        if (!lead) {
+          return reply.status(404).send({ error: 'Lead non trouvé' });
+        }
+        if (!lead.hubspotContactId) {
+          return reply.status(400).send({ error: 'Ce prospect ne possède pas encore de contactId HubSpot synchronisé.' });
+        }
+
+        const body = request.body || ({} as any);
+        const actorId = request.user?.userId || 'agent';
+
+        const ensured = await hubspotPipelineService.ensureDealForRequest({
+          leadId: lead.id,
+          contactId: lead.hubspotContactId,
+          requestKey: body.requestKey,
+          forceNewProject: body.forceNewProject,
+          isTest: body.isTest,
+        });
+
+        const tr = await hubspotPipelineService.transitionRequestStage({
+          requestKey: ensured.requestKey,
+          targetStage: body.stage,
+          paymentVerified: body.paymentVerified,
+          paymentVerifiedBy: body.paymentVerified ? actorId : undefined,
+          paymentReference: body.paymentReference,
+          bookingConfirmed: body.bookingConfirmed,
+          allowReopen: body.allowReopen,
+          allowTerminalOverride: body.allowTerminalOverride,
+        });
+
+        await prisma.auditLog
+          .create({
+            data: {
+              actorId,
+              action: 'hubspot.pipeline_stage_transition',
+              entityId: lead.id,
+              metadata: {
+                requestKey: ensured.requestKey,
+                dealId: ensured.dealId,
+                targetStage: body.stage,
+                resultStatus: tr.status,
+                effectiveStage: tr.stage,
+                paymentVerified: Boolean(body.paymentVerified),
+                bookingConfirmed: Boolean(body.bookingConfirmed),
+              },
+            },
+          })
+          .catch(() => undefined);
+
+        return reply.send({
+          requestKey: ensured.requestKey,
+          dealId: ensured.dealId,
+          ...tr,
+        });
       }
     );
   });

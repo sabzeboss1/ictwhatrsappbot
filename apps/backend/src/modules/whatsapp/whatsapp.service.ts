@@ -249,8 +249,8 @@ export class WhatsAppService {
     let target = phone.includes('@lid')
       ? phone
       : phone.includes('@s.whatsapp.net')
-      ? phone.split('@')[0].replace(/[^\d]/g, '')
-      : phone.replace(/[^\d]/g, '');
+        ? phone.split('@')[0].replace(/[^\d]/g, '')
+        : phone.replace(/[^\d]/g, '');
 
     // Conversion automatique indicatif si nécessaire :
     // Si format français local (10 chiffres commençant par 06 ou 07) -> 336... / 337...
@@ -431,16 +431,25 @@ export class WhatsAppService {
       emitLeadUpdated(lead);
     }
 
-    // 4. Enregistrer le message entrant
-    const inboundMessage = await prisma.message.create({
-      data: {
-        leadId: lead.id,
-        direction: 'inbound',
-        content: text,
-        messageType,
-        whatsappMessageId: whatsappMessageId || undefined,
-      },
-    });
+    // 4. Enregistrer le message entrant (avec protection contre doublon concurrent P2002 sur whatsappMessageId)
+    let inboundMessage: any;
+    try {
+      inboundMessage = await prisma.message.create({
+        data: {
+          leadId: lead.id,
+          direction: 'inbound',
+          content: text,
+          messageType,
+          whatsappMessageId: whatsappMessageId || undefined,
+        },
+      });
+    } catch (createErr: any) {
+      if (createErr?.code === 'P2002' && whatsappMessageId) {
+        console.log(`[Anti-doublon concurrent] Message ${whatsappMessageId} déjà inséré en parallèle, ignoré.`);
+        return { duplicate: true };
+      }
+      throw createErr;
+    }
 
     // Le prospect a répondu : on remet à zéro le compteur de relances et on annule les relances
     // automatiques en attente (inutile de relancer quelqu'un qui vient d'écrire).
@@ -665,15 +674,15 @@ export class WhatsAppService {
     const leadContextForAI =
       freshSession || hadPromptSwitchSinceLastUpdate || history.length === 0
         ? {
-            ...lead,
-            need: null,
-            recommendedOffer: null,
-            quotedPrice: null,
-            estimatedAmount: null,
-            preferredDate: null,
-            participantsCount: null,
-            budget: null,
-          }
+          ...lead,
+          need: null,
+          recommendedOffer: null,
+          quotedPrice: null,
+          estimatedAmount: null,
+          preferredDate: null,
+          participantsCount: null,
+          budget: null,
+        }
         : lead;
 
     // Appel Agent IA
@@ -692,8 +701,8 @@ export class WhatsAppService {
       aiOutput.participants_count !== undefined && aiOutput.participants_count !== null
         ? aiOutput.participants_count
         : lead.participantsCount && lead.participantsCount < 150
-        ? lead.participantsCount
-        : null;
+          ? lead.participantsCount
+          : null;
 
     // Détection d'un vrai numéro de téléphone (soit extrait par l'IA, soit par regex dans le texte)
     let extractedPhone: string | null = null;
@@ -785,14 +794,18 @@ export class WhatsAppService {
         reason: aiOutput.is_b2b
           ? 'Demande Entreprise (B2B)'
           : aiOutput.is_vip
-          ? 'Client VIP'
-          : 'Opportunité chaude (Score ≥ 80)',
+            ? 'Client VIP'
+            : 'Opportunité chaude (Score ≥ 80)',
         lead: updatedLead,
       });
     }
 
     // Déclenchement asynchrone de la synchronisation HubSpot
-    await enqueueHubspotSync({ leadId: updatedLead.id });
+    await enqueueHubspotSync({
+      leadId: updatedLead.id,
+      inboundText,
+      offerActuallySent: Boolean(aiOutput.send_catalog || aiOutput.quoted_price),
+    });
   }
 
   /**
@@ -864,8 +877,8 @@ export class WhatsAppService {
     let target = phone.includes('@lid')
       ? phone
       : phone.includes('@s.whatsapp.net')
-      ? phone.split('@')[0].replace(/[^\d]/g, '')
-      : phone.replace(/[^\d]/g, '');
+        ? phone.split('@')[0].replace(/[^\d]/g, '')
+        : phone.replace(/[^\d]/g, '');
 
     if ((target.startsWith('06') || target.startsWith('07')) && target.length === 10) {
       target = '33' + target.substring(1);
@@ -921,6 +934,7 @@ export class WhatsAppService {
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (lead) {
       emitNewMessage(docMessage, lead);
+      await enqueueHubspotSync({ leadId, offerActuallySent: true });
     }
 
     return { result, message: docMessage };

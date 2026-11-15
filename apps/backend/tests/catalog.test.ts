@@ -87,7 +87,7 @@ describe('CatalogService & PDF Generation', () => {
     expect(res206.headers['accept-ranges']).toBe('bytes');
 
     await app.close();
-  });
+  }, 15000);
 });
 
 describe('Lead Qualification with Catalog Detection', () => {

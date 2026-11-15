@@ -30,13 +30,13 @@ const fastify = Fastify({
     transport:
       env.NODE_ENV === 'development'
         ? {
-            target: 'pino-pretty',
-            options: {
-              colorize: true,
-              translateTime: 'HH:MM:ss',
-              ignore: 'pid,hostname',
-            },
-          }
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'HH:MM:ss',
+            ignore: 'pid,hostname',
+          },
+        }
         : undefined,
   },
 });
@@ -68,7 +68,10 @@ async function bootstrap() {
         await whatsAppService.processLeadThroughAI(data);
       },
       async (data) => {
-        await hubspotService.syncLeadToHubSpot(data.leadId);
+        await hubspotService.syncLeadToHubSpot(data.leadId, {
+          offerActuallySent: data.offerActuallySent,
+          inboundText: data.inboundText,
+        });
       }
     );
 

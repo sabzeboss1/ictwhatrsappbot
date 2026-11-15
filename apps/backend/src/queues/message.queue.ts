@@ -11,6 +11,8 @@ export interface ProcessMessageJobData {
 
 export interface HubspotSyncJobData {
   leadId: string;
+  offerActuallySent?: boolean;
+  inboundText?: string;
 }
 
 type MessageProcessorFn = (data: ProcessMessageJobData) => Promise<void>;

@@ -1,6 +1,13 @@
 import { Client } from '@hubspot/api-client';
 import { env } from '../../config/env.js';
 import { prisma } from '../../plugins/prisma.js';
+import {
+  hubspotPipelineService,
+  evaluateReliableStage,
+  PIPELINE_ID,
+  ETAPES,
+  EtapeKey,
+} from './hubspot.pipeline.js';
 
 export function isValidPhoneNumber(phone?: string | null): boolean {
   if (!phone) return false;
@@ -229,7 +236,15 @@ export class HubSpotService {
     }
   }
 
-  public async syncLeadToHubSpot(leadId: string): Promise<{ success: boolean; contactId?: string; dealId?: string; error?: string }> {
+  public async syncLeadToHubSpot(
+    leadId: string,
+    options?: {
+      offerActuallySent?: boolean;
+      inboundText?: string;
+      forceNewProject?: boolean;
+      isTest?: boolean;
+    }
+  ): Promise<{ success: boolean; contactId?: string; dealId?: string; stage?: EtapeKey; error?: string }> {
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
     });
@@ -243,7 +258,7 @@ export class HubSpotService {
     // Cela évite d'encombrer le CRM avec des contacts non qualifiés (ex: juste "bonjour").
     const HUBSPOT_MIN_SCORE = 30;
     const alreadySynced = Boolean(lead.hubspotContactId);
-    if (lead.qualificationScore < HUBSPOT_MIN_SCORE && !alreadySynced) {
+    if (lead.qualificationScore < HUBSPOT_MIN_SCORE && !alreadySynced && !options?.isTest) {
       console.log(`[HubSpot] Lead ${lead.id} ignoré (score ${lead.qualificationScore} < ${HUBSPOT_MIN_SCORE}, pas encore dans HubSpot)`);
       return { success: true }; // Pas d'erreur, juste pas encore qualifié
     }
@@ -251,15 +266,16 @@ export class HubSpotService {
     const effectivePhone = getEffectivePhoneNumber(lead);
     const aiSummary = this.buildAiSummaryText(lead);
 
-    // Si aucun token HubSpot n'est configuré, simulation gracieuse
-    if (!this.hubspotClient || !env.HUBSPOT_ACCESS_TOKEN) {
-      console.log(`[HubSpotService] Simulation sync pour le lead ${effectivePhone || lead.phone} (Score: ${lead.qualificationScore})`);
-      const mockContactId = lead.hubspotContactId || `hs_contact_${Date.now()}`;
-      let mockDealId = lead.hubspotDealId;
+    // Si aucun token HubSpot n'est configuré ou mode Dry-Run, simulation gracieuse
+    if (!this.hubspotClient || !env.HUBSPOT_ACCESS_TOKEN || hubspotPipelineService.isDryRunMode()) {
+      console.log(`[HubSpotService] Simulation sync pour le lead ${ lead.id } (Score: ${lead.qualificationScore})`);
+      const mockContactId =
+        lead.hubspotContactId && /^\d+$/.test(lead.hubspotContactId)
+          ? lead.hubspotContactId
+          : `${Date.now()}`;
 
-      if ((lead.qualificationScore >= 61 || lead.nextStep === 'Paiement' || lead.nextStep === 'Conseiller humain') && !mockDealId) {
-        mockDealId = `hs_deal_${Date.now()}`;
-      }
+      const pipelineRes = await this.syncCommercialDealForLead(lead, mockContactId, options);
+      const mockDealId = pipelineRes.dealId || lead.hubspotDealId;
 
       await prisma.lead.update({
         where: { id: lead.id },
@@ -271,7 +287,12 @@ export class HubSpotService {
         },
       });
 
-      return { success: true, contactId: mockContactId, dealId: mockDealId || undefined };
+      return {
+        success: true,
+        contactId: mockContactId,
+        dealId: mockDealId || undefined,
+        stage: pipelineRes.stage,
+      };
     }
 
     try {
@@ -434,50 +455,15 @@ export class HubSpotService {
         await this.createHubSpotNote(contactId, lead);
       }
 
-      // 2. Gestion de l'Objet Deal (si score >= 61 ou paiement/conseiller humain)
+      // 2. Suivi de la demande commerciale dans le pipeline HubSpot existant (4352514296)
       let dealId = lead.hubspotDealId;
-      const shouldCreateDeal = lead.qualificationScore >= 61 || lead.nextStep === 'Paiement' || lead.nextStep === 'Conseiller humain';
-
-      if (shouldCreateDeal && !dealId && contactId) {
-        try {
-          const contactLabel = [lead.firstName, lead.lastName].filter(Boolean).join(' ') || effectivePhone || 'Prospect';
-          const dealName = `Prospect ${contactLabel} - ${lead.recommendedOffer || 'Tour ICT'}`.trim();
-          const dealStage = lead.nextStep === 'Paiement' ? 'qualifiedtobuy' : 'appointmentscheduled';
-
-          const dealProperties: Record<string, string> = {
-            dealname: dealName,
-            dealstage: dealStage,
-            pipeline: env.HUBSPOT_PIPELINE_ID || 'default',
-            description: aiSummary,
-          };
-
-          if (lead.budget) {
-            const numericAmount = lead.budget.replace(/[^\d]/g, '');
-            if (numericAmount && Number(numericAmount) > 0) {
-              dealProperties.amount = numericAmount;
-            }
-          }
-
-          const createdDeal = await this.hubspotClient.crm.deals.basicApi.create({
-            properties: dealProperties,
-            associations: [
-              {
-                to: { id: contactId },
-                types: [
-                  {
-                    associationCategory: 'HUBSPOT_DEFINED' as any,
-                    associationTypeId: 3, // Deal to Contact
-                  },
-                ],
-              },
-            ],
-          });
-          dealId = createdDeal.id;
-          console.log(`[HubSpot] Deal créé : ${dealId} associé au contact ${contactId}`);
-        } catch (dealErr: any) {
-          console.error(`[HubSpot] Erreur lors de la création du Deal pour le contact ${contactId}:`, dealErr?.message || dealErr);
-          // On ne fait pas échouer toute la synchronisation du contact si seul le deal a échoué
+      let syncedStage: EtapeKey | undefined = undefined;
+      if (contactId) {
+        const dealRes = await this.syncCommercialDealForLead(lead, contactId, options);
+        if (dealRes.dealId) {
+          dealId = dealRes.dealId;
         }
+        syncedStage = dealRes.stage;
       }
 
       await prisma.lead.update({
@@ -490,7 +476,12 @@ export class HubSpotService {
         },
       });
 
-      return { success: true, contactId: contactId || undefined, dealId: dealId || undefined };
+      return {
+        success: true,
+        contactId: contactId || undefined,
+        dealId: dealId || undefined,
+        stage: syncedStage,
+      };
     } catch (err: any) {
       const errorMsg = err.message || 'Erreur HubSpot inconnue';
       console.error(`[HubSpot] Échec de synchronisation pour le lead ${lead.id}:`, errorMsg);
@@ -506,6 +497,66 @@ export class HubSpotService {
       return { success: false, error: errorMsg };
     }
   }
+
+  /**
+   * Synchronise la demande commerciale du prospect dans le pipeline HubSpot "Suivi commercial WhatsApp" (4352514296)
+   * uniquement lorsqu'une demande commerciale est identifiée et que le mode pipeline (ou simulation/test) est actif.
+   */
+  public async syncCommercialDealForLead(
+    lead: any,
+    contactId: string,
+    options?: {
+      offerActuallySent?: boolean;
+      inboundText?: string;
+      forceNewProject?: boolean;
+      isTest?: boolean;
+    }
+  ): Promise<{ dealId?: string; stage?: EtapeKey }> {
+    const syncActive =
+      hubspotPipelineService.isPipelineSyncEnabled() ||
+      hubspotPipelineService.isDryRunMode() ||
+      Boolean(options?.isTest);
+
+    if (!syncActive) {
+      return { dealId: lead.hubspotDealId || undefined };
+    }
+
+    const targetStage = evaluateReliableStage({
+      conversationStage: lead.conversationStage,
+      intent: lead.intent,
+      need: lead.need,
+      recommendedOffer: lead.recommendedOffer,
+      participantsCount: lead.participantsCount,
+      preferredDate: lead.preferredDate,
+      productIdentified: lead.productIdentified,
+      purchaseIntent: lead.purchaseIntent,
+      offerActuallySent: Boolean(options?.offerActuallySent || lead.quotedPrice),
+      inboundText: options?.inboundText,
+    });
+
+    if (!targetStage) {
+      return { dealId: lead.hubspotDealId || undefined };
+    }
+
+    const ensured = await hubspotPipelineService.ensureDealForRequest({
+      leadId: lead.id,
+      contactId,
+      forceNewProject: options?.forceNewProject,
+      isTest: options?.isTest,
+    });
+
+    if (targetStage !== 'NOUVELLE_DEMANDE') {
+      const tr = await hubspotPipelineService.transitionRequestStage({
+        requestKey: ensured.requestKey,
+        targetStage,
+        offerSent: options?.offerActuallySent,
+      });
+      return { dealId: ensured.dealId, stage: tr.stage };
+    }
+
+    return { dealId: ensured.dealId, stage: ensured.stage };
+  }
 }
 
+export { PIPELINE_ID, ETAPES };
 export const hubspotService = new HubSpotService();
